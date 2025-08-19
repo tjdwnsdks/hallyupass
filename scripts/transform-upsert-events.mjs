@@ -3,7 +3,7 @@ import { selectRawRecent, upsert } from './lib/sb.mjs';
 
 const i32 = (buf)=> buf.readInt32BE(0);
 const md5i32 = (s)=> i32(crypto.createHash('md5').update(s).digest());
-const toDate = (s)=> s ? String(s).replace(/(\d{4})(\d{2})(\d{2})/,'$1-$2-$3') : null;
+const toDate = (s)=> s ? String(s).replace(/(\d{4})(\d{2})(\d{2})/,'$1-$2-$3') : (typeof s==='string' ? s.slice(0,10) : null);
 const num = (v)=> { const n=Number(v); return Number.isFinite(n)?n:null; };
 
 function mapTourFestival(it){
@@ -34,8 +34,8 @@ function mapKcisa(it){
     id: hid,
     type: inferTypeKCISA(it),
     title: it.title,
-    start_date: it.startDate?.slice(0,10) || null,
-    end_date: it.endDate?.slice(0,10) || null,
+    start_date: toDate(it.startDate),
+    end_date: toDate(it.endDate),
     city: it.place || null,
     lat: null, lng: null,
     address: it.place || '',
@@ -53,6 +53,7 @@ async function run(){
     const it = r.payload;
     if(r.source==='tourapi' && r.dataset==='festival' && it?.contentid){ events.push(mapTourFestival(it)); }
     if(r.source==='kcisa' && it?.title){ events.push(mapKcisa(it)); }
+    // 숙박/코스는 events 테이블로 넣지 않음(별도 기능에서 참조 예정)
   }
   const uniq = Object.values(events.reduce((a,e)=> (a[e.id]=e, a), {}));
   const res = await upsert('events', uniq);
