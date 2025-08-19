@@ -10,6 +10,7 @@ export async function upsert(table, rows){
   if(!r.ok) throw new Error(`${table} upsert ${r.status} ${await r.text()}`);
   return {count: rows.length};
 }
+
 export async function selectRawRecent(hours=72){
   const from = new Date(Date.now()-hours*3600*1000).toISOString();
   const r = await fetch(`${SB_URL}/rest/v1/raw_sources?select=*&fetched_at=gte.${from}`, { headers: H });
