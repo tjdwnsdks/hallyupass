@@ -3,7 +3,7 @@ import { upsert } from './lib/sb.mjs';
 
 const RAWKEY = process.env.DATA_GO_KR_KCISA || process.env.DATA_GO_KR_KEY;
 const KEY    = encodeKeyOnce(RAWKEY);
-const BASE  = 'https://apis.data.go.kr/B553457/cultureinfo';
+const BASE  = 'https://apis.data.go.kr/B553457/cultureInfo';
 const AHEAD = Number(process.env.DAYS_AHEAD || '60');
 
 async function run(){
