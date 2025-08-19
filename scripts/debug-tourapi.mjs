@@ -1,9 +1,9 @@
 import { getDataGoKrKey } from "./lib/env.mjs";
 import { fetchOpenApiJson } from "./lib/util.mjs";
 
-const KEY = getDataGoKrKey("DATA_GO_KR_TOURAPI"); // must be *decoded* key
+const KEY = getDataGoKrKey("DATA_GO_KR_TOURAPI"); // 디코딩키
 const BASE = "https://apis.data.go.kr/B551011";
-const PATH = "/KorService2/searchFestival2"; // v2, case-sensitive
+const PATH = "/KorService2/searchFestival2"; // v2, 케이스 주의
 
 const today = new Date();
 const start = today.toISOString().slice(0,10).replace(/-/g,"");
