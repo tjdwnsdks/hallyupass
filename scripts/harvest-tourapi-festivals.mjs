@@ -30,8 +30,11 @@ async function run(){
         const items = j?.response?.body?.items?.item || [];
         if(items.length===0) break;
         for(const it of items){
-          out.push({ source:'tourapi', dataset:'festival', external_id:String(it.contentid),
-            lang, payload:it, event_start:toDate(it.eventstartdate), event_end:toDate(it.eventenddate), city: it.addr1||null });
+          out.push({
+            source:'tourapi', dataset:'festival', external_id:String(it.contentid),
+            lang, payload:it, event_start:toDate(it.eventstartdate), event_end:toDate(it.eventenddate),
+            city: it.addr1||null
+          });
         }
         if(items.length<30) break;
       }
