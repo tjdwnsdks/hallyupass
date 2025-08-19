@@ -1,7 +1,7 @@
 import { qs, todayYmd, plusDaysYmd } from './lib/util.mjs';
 import { upsert } from './lib/sb.mjs';
 
-const KEY   = process.env.DATA_GO_KR_KEY;     // 같은 서비스키
+const KEY   = process.env.DATA_GO_KR_KCISA || process.env.DATA_GO_KR_KEY;
 const BASE  = 'https://apis.data.go.kr/B553457/cultureinfo';
 const AHEAD = Number(process.env.DAYS_AHEAD || '60');
 
