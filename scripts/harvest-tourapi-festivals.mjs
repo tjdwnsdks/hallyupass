@@ -1,26 +1,26 @@
 import { getDataGoKrKey, ymd } from "./lib/env.mjs";
 import { pagedJson } from "./lib/util.mjs";
-import { buildUrl, getWithPreview, parseJsonOrThrow } from "./lib/http.mjs";
+import { buildUrl } from "./lib/http.mjs";
 
-// Inputs
+// 입력값
 const KEY = getDataGoKrKey("DATA_GO_KR_TOURAPI");
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE;
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE) throw new Error("Missing Supabase env");
 
-// Query window
+// 기간
 const DAYS_AHEAD = Number(process.env.DAYS_AHEAD ?? 60);
 const startYmd = ymd(new Date());
 const endYmd = ymd(new Date(Date.now()+DAYS_AHEAD*86400000));
 
-// Areas
+// 지역
 const AREACODES = (process.env.AREACODES ?? "1,2").split(",").map(s=>s.trim()).filter(Boolean);
 
-// Endpoint
+// 엔드포인트
 const BASE = "https://apis.data.go.kr/B551011";
 const PATH = "/KorService2/searchFestival2";
 
-// Upsert to Supabase REST
+// Supabase upsert
 async function upsertFestivals(rows){
   if (!rows.length) return { inserted: 0 };
   const url = buildUrl(SUPABASE_URL, "/rest/v1/festivals", { on_conflict: "contentid" });
@@ -57,7 +57,7 @@ function mapFestivalRow(it){
     firstimage: it.firstimage ?? null,
     createdtime: it.createdtime ?? null,
     modifiedtime: it.modifiedtime ?? null,
-    raw: it // keep original for debugging
+    raw: it
   };
 }
 
