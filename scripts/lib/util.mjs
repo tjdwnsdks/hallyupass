@@ -3,12 +3,24 @@ export const todayYmd = ()=> new Date().toISOString().slice(0,10).replace(/-/g,'
 export const plusDaysYmd = (n)=>{ const d=new Date(); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10).replace(/-/g,''); };
 export const toDate = (ymd)=> ymd ? String(ymd).replace(/(\d{4})(\d{2})(\d{2})/,'$1-$2-$3') : null;
 
+// KEY가 이미 인코딩된(%) 형식이면 재인코딩하지 않음
+export const encodeKeyOnce = (k)=>{
+  if(!k) return '';
+  return /%[0-9A-Fa-f]{2}/.test(k) ? k : encodeURIComponent(k);
+};
+
 export async function* pagedJson(build, start=1, max=20){
   for(let p=start; p<=max; p++){
     const url = build(p);
     const r = await fetch(url);
-    if(!r.ok){ console.error('fetch fail', r.status, url); break; }
-    const j = await r.json();
-    yield j;
+    // JSON 실패시 텍스트를 찍어 원인 확인
+    const txt = await r.text();
+    try{
+      const j = JSON.parse(txt);
+      yield j;
+    }catch(e){
+      console.error('Non-JSON response:', txt.slice(0,200));
+      throw e;
+    }
   }
 }
