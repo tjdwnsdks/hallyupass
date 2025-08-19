@@ -4,6 +4,7 @@ import { upsert } from './lib/sb.mjs';
 const KEY    = process.env.DATA_GO_KR_TOURAPI || process.env.DATA_GO_KR_KEY;
 const LANGS  = (process.env.TOUR_LANGS || 'ko,en').split(',').map(s=>s.trim().toLowerCase());
 const AREAS  = (process.env.AREACODES || '1,2,3,4,5,6,7,8,31,32,33,34,35,36,37,38,39').split(',').map(s=>Number(s.trim()));
+
 const baseFor = (lang)=>{
   switch(lang){
     case 'ko':   return 'https://apis.data.go.kr/B551011/KorService2';
@@ -22,7 +23,7 @@ async function run(){
     const BASE = baseFor(lang);
     for(const areaCode of AREAS){
       const q = { serviceKey:KEY, MobileOS:'ETC', MobileApp:'HallyuPass', _type:'json',
-                  contentTypeId:32, areaCode, numOfRows:30, arrange:'C' };
+                  contentTypeId:32, areaCode, numOfRows:30, arrange:'C' }; // 32=숙박
       const build = (pageNo)=> `${BASE}/areaBasedList2?${qs({...q, pageNo})}`;
       for await (const j of pagedJson(build,1,10)){
         const items = j?.response?.body?.items?.item || [];
