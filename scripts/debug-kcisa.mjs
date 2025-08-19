@@ -1,7 +1,7 @@
 import { getDataGoKrKey } from "./lib/env.mjs";
 import { fetchOpenApiJson } from "./lib/util.mjs";
 
-const KEY = getDataGoKrKey("DATA_GO_KR_KCISA"); // decoded
+const KEY = getDataGoKrKey("DATA_GO_KR_KCISA"); // 디코딩키
 const BASE = "https://api.kcisa.kr/openapi";
 const PATH = "/service/rest/convergence2019/getConver04";
 
