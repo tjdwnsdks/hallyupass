@@ -1,73 +1,37 @@
 name: harvest
 on:
+  workflow_dispatch:
   schedule:
-    - cron: "0 */4 * * *"
-  workflow_dispatch: {}
+    - cron: "15 3 * * *" # 12:15 KST daily
+
 jobs:
-  harvest:
+  run:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     env:
-      TOUR_LANGS: "ko,en,ja,chs,cht"       # ← zh 제거, chs/cht 추가
-      DAYS_AHEAD: "60"
-      AREACODES: "1,2,3,4,5,6,7,8,31,32,33,34,35,36,37,38,39"
+      TOUR_LANGS: ko,en,ja,chs,cht
+      DAYS_AHEAD: 60
+      AREACODES: 1,2,3,4,5,6,7,8,31,32,33,34,35,36,37,38,39
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
+      DATA_GO_KR_TOURAPI: ${{ secrets.DATA_GO_KR_TOURAPI }}   # 반드시 "디코딩 키"
+      DATA_GO_KR_KCISA: ${{ secrets.DATA_GO_KCISA }}          # 반드시 "디코딩 키"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: "20" }
+        with:
+          node-version: 20
+      - run: npm ci --prefer-offline
 
-      - name: TourAPI festivals
-        env:
-          DATA_GO_KR_TOURAPI: ${{ secrets.DATA_GO_KR_TOURAPI }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
-          TOUR_LANGS: ${{ env.TOUR_LANGS }}
-          DAYS_AHEAD: ${{ env.DAYS_AHEAD }}
-          AREACODES: ${{ env.AREACODES }}
+      - name: Print key state (once)
+        run: node scripts/print-key-state.mjs
+
+      - name: Debug TourAPI
+        run: node scripts/debug-tourapi.mjs
+
+      - name: Debug KCISA
+        run: node scripts/debug-kcisa.mjs
+
+      - name: Harvest festivals
         run: node scripts/harvest-tourapi-festivals.mjs
-
-      - name: TourAPI food
-        env:
-          DATA_GO_KR_TOURAPI: ${{ secrets.DATA_GO_KR_TOURAPI }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
-          TOUR_LANGS: ${{ env.TOUR_LANGS }}
-          AREACODES: ${{ env.AREACODES }}
-        run: node scripts/harvest-tourapi-food.mjs
-
-      - name: TourAPI accommodation
-        env:
-          DATA_GO_KR_TOURAPI: ${{ secrets.DATA_GO_KR_TOURAPI }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
-          TOUR_LANGS: ${{ env.TOUR_LANGS }}
-          AREACODES: ${{ env.AREACODES }}
-        run: node scripts/harvest-tourapi-accommodation.mjs
-
-      - name: TourAPI courses
-        env:
-          DATA_GO_KR_TOURAPI: ${{ secrets.DATA_GO_KR_TOURAPI }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
-          TOUR_LANGS: ${{ env.TOUR_LANGS }}
-          AREACODES: ${{ env.AREACODES }}
-        run: node scripts/harvest-tourapi-courses.mjs
-
-      - name: KCISA performance/exhibition
-        env:
-          DATA_GO_KR_KCISA: ${{ secrets.DATA_GO_KR_KCISA }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
-          DAYS_AHEAD: ${{ env.DAYS_AHEAD }}
-        run: node scripts/harvest-kcisa.mjs
-
-      - name: Transform → events
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
-        run: node scripts/transform-upsert-events.mjs
-
-      - name: Transform → food_places
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
-        run: node scripts/transform-upsert-food.mjs
