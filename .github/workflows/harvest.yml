@@ -1,0 +1,49 @@
+name: harvest
+on:
+  schedule:
+    - cron: "0 */4 * * *"   # 4시간마다(UTC)
+  workflow_dispatch: {}      # 수동 실행 버튼
+jobs:
+  harvest:
+    runs-on: ubuntu-latest
+    env:
+      TOUR_LANGS: "en,ko"
+      DAYS_AHEAD: "60"
+      AREACODES: "1,2,3,4,5,6,7,8,31,32,33,34,35,36,37,38,39"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+
+      - name: TourAPI festivals
+        env:
+          DATA_GO_KR_KEY: ${{ secrets.DATA_GO_KR_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
+        run: node scripts/harvest-tourapi-festivals.mjs
+
+      - name: TourAPI food
+        env:
+          DATA_GO_KR_KEY: ${{ secrets.DATA_GO_KR_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
+        run: node scripts/harvest-tourapi-food.mjs
+
+      - name: KCISA performance/exhibition
+        env:
+          DATA_GO_KR_KEY: ${{ secrets.DATA_GO_KR_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
+        run: node scripts/harvest-kcisa.mjs
+
+      - name: Transform → events
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
+        run: node scripts/transform-upsert-events.mjs
+
+      - name: Transform → food_places
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
+        run: node scripts/transform-upsert-food.mjs
