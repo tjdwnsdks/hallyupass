@@ -1,6 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 
-/** Build URL with *single* encoding via URLSearchParams */
+/** URLSearchParams로 한 번만 인코딩되도록 URL 생성 */
 export function buildUrl(base, path, params) {
   const u = new URL(path, base);
   const qs = new URLSearchParams(params ?? {});
@@ -8,7 +8,7 @@ export function buildUrl(base, path, params) {
   return u.toString();
 }
 
-/** GET with retries and rich logs */
+/** GET + 재시도 + 프리뷰 로그 */
 export async function getWithPreview(url, { retries = 3, timeoutMs = 20000 } = {}) {
   let lastErr, bodyBuf, res;
   for (let i=0;i<retries;i++){
@@ -39,7 +39,7 @@ export async function getWithPreview(url, { retries = 3, timeoutMs = 20000 } = {
   throw new Error(`RequestFailed: ${url} :: ${lastErr?.message || "unknown"}`);
 }
 
-/** Parse JSON or throw clear NonJSON error with preview */
+/** JSON 파싱. 비JSON이면 미리보기 포함 에러 */
 export function parseJsonOrThrow(bodyBuf, contentType) {
   if (!/json/i.test(contentType)) {
     const head = bodyBuf.subarray(0, 512).toString();
