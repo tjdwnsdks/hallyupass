@@ -1,8 +1,11 @@
 import { setTimeout as sleep } from "node:timers/promises";
 
-/** URLSearchParams로 한 번만 인코딩되도록 URL 생성 */
+/** BASE의 경로를 보존하며 PATH를 이어 붙입니다. */
 export function buildUrl(base, path, params) {
-  const u = new URL(path, base);
+  const u = new URL(base);
+  const basePath = u.pathname.replace(/\/+$/,"");      // 끝 슬래시 제거
+  const addPath  = String(path ?? "").replace(/^\/+/,""); // 앞 슬래시 제거
+  u.pathname = [basePath, addPath].filter(Boolean).join("/");
   const qs = new URLSearchParams(params ?? {});
   u.search = qs.toString();
   return u.toString();
