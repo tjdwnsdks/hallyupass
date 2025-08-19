@@ -53,7 +53,6 @@ async function run(){
     const it = r.payload;
     if(r.source==='tourapi' && r.dataset==='festival' && it?.contentid){ events.push(mapTourFestival(it)); }
     if(r.source==='kcisa' && it?.title){ events.push(mapKcisa(it)); }
-    // 숙박/코스는 events 테이블로 넣지 않음(별도 기능에서 참조 예정)
   }
   const uniq = Object.values(events.reduce((a,e)=> (a[e.id]=e, a), {}));
   const res = await upsert('events', uniq);
