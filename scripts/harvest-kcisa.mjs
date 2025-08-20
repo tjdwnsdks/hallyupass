@@ -1,27 +1,61 @@
-name: harvest-kcisa
-on:
-  workflow_dispatch:
-  schedule:
-    - cron: "0 */12 * * *" # 12시간마다(UTC)
+import { getDataGoKrKey, ymd } from "./lib/env.mjs";
 
-jobs:
-  run:
-    runs-on: ubuntu-latest
-    env:
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
-      DATA_GO_KR_KCISA: ${{ secrets.DATA_GO_KR_KCISA }}
+const KEY = getDataGoKrKey("DATA_GO_KR_KCISA");
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE;
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE) throw new Error("Missing Supabase env");
 
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 20 }
+const BASE = "https://apis.data.go.kr/B553457";
+const PATH = "cultureinfo/period2";
 
-      # 현재는 원문만 적재(디버그 겸용)
-      - name: Harvest KCISA → raw_sources (XML)
-        run: node scripts/harvest-kcisa.mjs
+function buildUrl(base, path, q = {}) {
+  const u = new URL(path.replace(/^\//, ""), base + "/");
+  u.search = new URLSearchParams(q).toString();
+  return u.toString();
+}
+async function getText(url) {
+  const res = await fetch(url, { headers: { "Accept": "*/*" } });
+  return { text: await res.text(), status: res.status, statusText: res.statusText };
+}
 
-      - name: Verify KCISA saved to raw_sources
-        run: |
-          echo "Check in Supabase console:"
-          echo "select count(*) from public.raw_sources where source='kcisa' and dataset='cultureinfo.period2';"
+const from = ymd(new Date());
+const to   = ymd(new Date(Date.now() + 30 * 86400000));
+
+async function upsertRawXml(xml, externalId) {
+  const url = buildUrl(SUPABASE_URL, "/rest/v1/raw_sources", {
+    on_conflict: "source,dataset,external_id,lang"
+  });
+  const payload = [{
+    source: "kcisa",
+    dataset: "cultureinfo.period2",
+    external_id: externalId,
+    lang: "ko",
+    payload_xml: xml
+  }];
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "apikey": SUPABASE_SERVICE_ROLE,
+      "Authorization": `Bearer ${SUPABASE_SERVICE_ROLE}`,
+      "Content-Type": "application/json",
+      "Prefer": "resolution=merge-duplicates"
+    },
+    body: JSON.stringify(payload)
+  });
+  if (!res.ok) throw new Error(`Supabase upsert raw failed: ${res.status} ${res.statusText} :: ${(await res.text()).slice(0,400)}`);
+}
+
+(async () => {
+  try {
+    const url = buildUrl(BASE, PATH, { serviceKey: KEY, pageNo: "1", numOfRows: "50", from, to });
+    const { text, status, statusText } = await getText(url);
+    if (status !== 200) throw new Error(`KCISA http ${status} ${statusText}`);
+    if (!text?.trim().startsWith("<")) throw new Error("KCISA non-XML response");
+    const externalId = `period2-${from}-${to}-p1`;
+    await upsertRawXml(text, externalId);
+    console.log({ saved: true, period: { from, to }, externalId });
+  } catch (e) {
+    console.error(e.message || e);
+    process.exitCode = 1;
+  }
+})();
