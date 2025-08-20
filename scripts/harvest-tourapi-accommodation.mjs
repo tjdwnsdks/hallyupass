@@ -1,46 +1,90 @@
-import { qs, pagedJson, encodeKeyOnce } from './lib/util.mjs';
-import { upsert } from './lib/sb.mjs';
+import { getDataGoKrKey } from "./lib/env.mjs";
+import { upsert } from "./lib/sb.mjs";
 
-const RAWKEY = process.env.DATA_GO_KR_TOURAPI || process.env.DATA_GO_KR_KEY;
-const KEY    = encodeKeyOnce(RAWKEY);
-const LANGS  = (process.env.TOUR_LANGS || 'ko,en,ja,chs,cht').split(',').map(s=>s.trim().toLowerCase());
-const AREAS  = (process.env.AREACODES || '1,2,3,4,5,6,7,8,31,32,33,34,35,36,37,38,39').split(',').map(s=>Number(s.trim()));
+const KEY = getDataGoKrKey("DATA_GO_KR_TOURAPI");
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE;
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE) throw new Error("Missing Supabase env");
 
-const baseFor = (lang)=>{
-  switch(lang){
-    case 'ko': return 'https://apis.data.go.kr/B551011/KorService2';
-    case 'en': return 'https://apis.data.go.kr/B551011/EngService2';
-    case 'ja': return 'https://apis.data.go.kr/B551011/JpnService2';
-    case 'chs':return 'https://apis.data.go.kr/B551011/ChsService2';
-    case 'cht':return 'https://apis.data.go.kr/B551011/ChtService2';
-    default:   return 'https://apis.data.go.kr/B551011/EngService2';
-  }
+const LANGS = (process.env.TOUR_LANGS ?? "ko,en,ja,chs,cht").split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+const AREACODES = (process.env.AREACODES ?? "1,2").split(",").map(s => s.trim()).filter(Boolean);
+
+const BASE = "https://apis.data.go.kr/B551011";
+const PATH_BY_LANG = {
+  ko: "KorService2/searchStay2",
+  en: "EngService2/searchStay2",
+  ja: "JpnService2/searchStay2",
+  chs:"ChsService2/searchStay2",
+  cht:"ChtService2/searchStay2"
 };
 
-async function run(){
-  const out=[];
-  for(const lang of LANGS){
-    const BASE = baseFor(lang);
-    for(const areaCode of AREAS){
-      const q = {
-        serviceKey: KEY,
-        MobileOS: 'ETC', MobileApp: 'HallyuPass',
-        _type: 'json',
-        contentTypeId: 32, // 숙박
-        areaCode, numOfRows: 30, arrange: 'C'
-      };
-      const build = (pageNo)=> `${BASE}/areaBasedList2?${qs({...q, pageNo})}`;
-      for await (const j of pagedJson(build,1,10)){
-        const items = j?.response?.body?.items?.item || [];
-        if(items.length===0) break;
-        for(const it of items){
-          out.push({ source:'tourapi', dataset:'accommodation', external_id:String(it.contentid), lang, payload:it, city: it.addr1||null });
-        }
-        if(items.length<30) break;
-      }
-    }
-  }
-  const res = await upsert('raw_sources', out);
-  console.log('tourapi accommodation saved:', res.count);
+function buildUrl(base, path, q = {}) {
+  const u = new URL(path.replace(/^\//, ""), base + "/");
+  u.search = new URLSearchParams(q).toString();
+  return u.toString();
 }
-run().catch(e=>{ console.error(e); process.exit(1); });
+
+async function getJson(url) {
+  const res = await fetch(url, { headers: { "Accept": "application/json" } });
+  const text = await res.text();
+  if (!text.trim().startsWith("{")) {
+    console.error("Non-JSON head:", text.slice(0,200));
+    console.error("URL:", url);
+    throw new Error("Response is not JSON");
+  }
+  return JSON.parse(text);
+}
+
+async function harvestLangArea(lang, areaCode) {
+  const path = PATH_BY_LANG[lang] || PATH_BY_LANG.en;
+  let upserts = 0, itemsTotal = 0;
+
+  for (let pageNo = 1; pageNo <= 40; pageNo++) {
+    const url = buildUrl(BASE, path, {
+      serviceKey: KEY,
+      MobileOS: "ETC",
+      MobileApp: "HallyuPass",
+      _type: "json",
+      areaCode,
+      numOfRows: "30",
+      arrange: "C",
+      pageNo: String(pageNo)
+    });
+
+    const j = await getJson(url);
+    const items = j?.response?.body?.items?.item || [];
+    if (!items.length) break;
+    itemsTotal += items.length;
+
+    const rows = items.map(it => ({
+      source: "tourapi",
+      dataset: "stay",
+      external_id: String(it.contentid),
+      lang,
+      payload: it,
+      event_start: null,
+      event_end: null,
+      city: it.addr1 || null
+    }));
+
+    const r = await upsert("raw_sources", rows);
+    upserts += r.count;
+
+    if (items.length < 30) break;
+  }
+  return { items: itemsTotal, upserted: upserts };
+}
+
+(async () => {
+  try {
+    const results = [];
+    for (const lang of LANGS) for (const area of AREACODES)
+      results.push(await harvestLangArea(lang, area));
+    const totalItems = results.reduce((s, x) => s + x.items, 0);
+    const totalUpserts = results.reduce((s, x) => s + x.upserted, 0);
+    console.log({ totalItems, totalUpserts });
+  } catch (e) {
+    console.error(e.message || e);
+    process.exitCode = 1;
+  }
+})();
