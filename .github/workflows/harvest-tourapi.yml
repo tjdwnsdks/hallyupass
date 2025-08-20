@@ -4,7 +4,7 @@ name: harvest-tourapi
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */6 * * *"
+    - cron: '0 */6 * * *'
 
 jobs:
   run:
@@ -16,34 +16,30 @@ jobs:
       SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
       DATA_GO_KR_TOURAPI: ${{ secrets.DATA_GO_KR_TOURAPI }}
       TOUR_LANGS: ko,en,ja,chs,cht
-      DAYS_AHEAD: 60
-      AREACODES: 1,2,3,4,5,6,7,8,31,32,33,34,35,36,37,38,39
+      DAYS_AHEAD: '60'
+      AREACODES: '1,2,3,4,5,6,7,8,31,32,33,34,35,36,37,38,39'
 
     steps:
-      - name: Checkout
+      - name: checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node
+      - name: setup-node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: '20'
 
-      - name: Print key state
+      - name: print-key-state
         run: node scripts/print-key-state.mjs
 
-      - name: Print TourAPI fingerprint
+      - name: print-fingerprint
         run: node scripts/print-tourapi-fingerprint.mjs
 
-      - name: Debug TourAPI
+      - name: debug-tourapi
         run: node scripts/debug-tourapi.mjs
         continue-on-error: true
 
-      - name: Harvest TourAPI → raw_sources
-        run: node scripts/harvest-tourapi-festivals.mjs || (echo "retry after 30s" && sleep 30 && node scripts/harvest-tourapi-festivals.mjs)
+      - name: harvest
+        run: node scripts/harvest-tourapi-festivals.mjs
 
-      - name: Transform raw_sources → events
+      - name: transform
         run: node scripts/transform-events.mjs
-
-      - name: Mark failure
-        if: failure()
-        run: echo "::error:: harvest-tourapi failed"
