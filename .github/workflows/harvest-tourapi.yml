@@ -63,3 +63,7 @@ jobs:
 
       - name: transform-food
         run: node scripts/transform-upsert-food.mjs
+
+- name: show harvest-tourapi-food.mjs header
+  run: |
+    sed -n '1,25p' scripts/harvest-tourapi-food.mjs
