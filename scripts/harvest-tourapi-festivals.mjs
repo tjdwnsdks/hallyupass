@@ -1,65 +1,93 @@
-// ==== standard header ====
-import { qs, pagedJson } from './lib/util.mjs';
+// TourAPI 축제 수집 → raw_sources (패키지 없음)
+import { qs } from './lib/util.mjs';
+import { upsertRaw } from './lib/db.mjs';
 
-// 공공데이터 키 이중 인코딩 1회만
-function encodeKeyOnce(raw){
-  const key = String(raw ?? '');
-  if (/%[0-9A-Fa-f]{2}/.test(key)) return key; // 이미 퍼센트 인코딩이면 그대로
-  try { decodeURIComponent(key); } catch {}
-  return encodeURIComponent(key);
+// 디코딩/인코딩 키 모두 수용
+function normalizeKey(raw) {
+  const k = String(raw ?? '');
+  if (/%[0-9A-Fa-f]{2}/.test(k)) return k;  // 이미 퍼센트 인코딩
+  try { decodeURIComponent(k); } catch {}
+  return encodeURIComponent(k);
 }
-// =========================
 
-// TourAPI 축제 데이터 수집
-import { createClient } from '@supabase/supabase-js';
+// YYYYMMDD UTC
+function ymdUTC(d = new Date()) {
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  return `${y}${m}${day}`;
+}
+function plusDaysYmd(n, base = new Date()) {
+  const d = new Date(base);
+  d.setUTCDate(d.getUTCDate() + Number(n || 0));
+  return ymdUTC(d);
+}
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE
-);
+async function fetchPage({key, areaCode, lang, pageNo, startYmd, endYmd}) {
+  const url = `https://apis.data.go.kr/B551011/KorService2/searchFestival2?` + qs({
+    serviceKey: key,
+    MobileOS: 'ETC',
+    MobileApp: 'HallyuPass',
+    _type: 'json',
+    eventStartDate: startYmd,
+    eventEndDate:   endYmd,
+    areaCode,
+    numOfRows: 100,
+    arrange: 'C',
+    pageNo,
+    lang
+  });
+  const r = await fetch(url, { headers: { Accept: 'application/json' } });
+  const txt = await r.text();
+  let items = [];
+  try {
+    const j = JSON.parse(txt);
+    items = j?.response?.body?.items?.item || [];
+    if (!Array.isArray(items)) items = items ? [items] : [];
+  } catch (e) {
+    console.error('Non-JSON head:', txt.slice(0,200));
+    console.error('URL:', url);
+    throw e;
+  }
+  return items;
+}
 
 async function run() {
-  const serviceKey = encodeKeyOnce(process.env.DATA_GO_KR_TOURAPI);
-  const langs = (process.env.TOUR_LANGS || 'ko').split(',');
-  const daysAhead = parseInt(process.env.DAYS_AHEAD || '60', 10);
-  const now = new Date();
-  const start = now.toISOString().slice(0,10).replace(/-/g,'');
-  const end = new Date(now.getTime() + daysAhead*86400000).toISOString().slice(0,10).replace(/-/g,'');
+  const key   = normalizeKey(process.env.DATA_GO_KR_TOURAPI);
+  const langs = (process.env.TOUR_LANGS || 'ko').split(',').map(s=>s.trim()).filter(Boolean);
+  const areas = (process.env.AREACODES || '1').split(',').map(s=>s.trim()).filter(Boolean);
+  const ahead = parseInt(process.env.DAYS_AHEAD || '60', 10);
+  const startYmd = ymdUTC();
+  const endYmd   = plusDaysYmd(ahead);
 
   for (const lang of langs) {
-    for (const area of (process.env.AREACODES || '1').split(',')) {
-      const url = `https://apis.data.go.kr/B551011/KorService2/searchFestival2?${qs({
-        serviceKey,
-        MobileOS: 'ETC',
-        MobileApp: 'HallyuPass',
-        _type: 'json',
-        eventStartDate: start,
-        eventEndDate: end,
-        areaCode: area,
-        numOfRows: 50,
-        pageNo: 1,
-        lang
-      })}`;
+    for (const areaCode of areas) {
+      console.log(`[FETCH] festivals area=${areaCode} lang=${lang} ${startYmd}-${endYmd}`);
+      for (let page=1; page<=20; page++) {
+        const items = await fetchPage({key, areaCode, lang, pageNo: page, startYmd, endYmd});
+        if (items.length === 0) break;
 
-      console.log(`[GET] ${url}`);
-      const items = await pagedJson(url, 'response.body.items.item');
-
-      for (const row of items) {
-        await supabase.from('raw_sources').insert({
-          dataset: 'festival',
-          source: 'tourapi',
-          lang,
-          contentid: row.contentid,
-          raw: row
-        }).then(({ error }) => {
-          if (error) console.error(error);
-        });
+        for (const it of items) {
+          const row = {
+            source: 'tourapi',
+            dataset: 'festival',
+            external_id: String(it.contentid),
+            lang,
+            payload: it,
+            event_start: it.eventstartdate ? `${it.eventstartdate.slice(0,4)}-${it.eventstartdate.slice(4,6)}-${it.eventstartdate.slice(6,8)}` : null,
+            event_end:   it.eventenddate   ? `${it.eventenddate.slice(0,4)}-${it.eventenddate.slice(4,6)}-${it.eventenddate.slice(6,8)}`   : null,
+            city: it.addr1 || null
+          };
+          try {
+            await upsertRaw(row);
+          } catch(err) {
+            console.error('upsert error:', err.message);
+          }
+        }
+        if (items.length < 100) break; // 마지막 페이지
       }
     }
   }
 }
 
-run().catch(err => {
-  console.error(err);
-  process.exit(1);
-});
+run().catch(e => { console.error(e); process.exit(1); });
