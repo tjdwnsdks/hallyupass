@@ -1,6 +1,6 @@
 import { getDataGoKrKey, ymd } from "./lib/env.mjs";
 
-const KEY = getDataGoKrKey("DATA_GO_KR_KCISA"); // 디코딩 키(+/= 포함)
+const KEY = getDataGoKrKey("DATA_GO_KR_KCISA");
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE;
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE) throw new Error("Missing Supabase env");
@@ -16,21 +16,20 @@ function buildUrl(base, path, q = {}) {
 
 async function getText(url) {
   const res = await fetch(url, { headers: { "Accept": "*/*" } });
-  const body = await res.text();
-  return { body, status: res.status, statusText: res.statusText };
+  return { text: await res.text(), status: res.status, statusText: res.statusText };
 }
 
 const from = ymd(new Date());
 const to   = ymd(new Date(Date.now() + 30 * 86400000));
 
-async function upsertRawXml({ xml, externalId }) {
+async function upsertRawXml(xml, extId) {
   const url = buildUrl(SUPABASE_URL, "/rest/v1/raw_sources", {
     on_conflict: "source,dataset,external_id,lang"
   });
   const payload = [{
     source: "kcisa",
     dataset: "cultureinfo.period2",
-    external_id: externalId,
+    external_id: extId,
     lang: "ko",
     payload_xml: xml
   }];
@@ -44,26 +43,17 @@ async function upsertRawXml({ xml, externalId }) {
     },
     body: JSON.stringify(payload)
   });
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error(`Supabase upsert raw failed: ${res.status} ${res.statusText} :: ${t.slice(0,400)}`);
-  }
+  if (!res.ok) throw new Error(`Supabase upsert raw failed: ${res.status} ${res.statusText} :: ${(await res.text()).slice(0,400)}`);
 }
 
 (async () => {
   try {
-    const url = buildUrl(BASE, PATH, {
-      serviceKey: KEY,
-      pageNo: "1",
-      numOfRows: "50",
-      from, to
-    });
-    const { body, status, statusText } = await getText(url);
+    const url = buildUrl(BASE, PATH, { serviceKey: KEY, pageNo: "1", numOfRows: "50", from, to });
+    const { text, status, statusText } = await getText(url);
     if (status !== 200) throw new Error(`KCISA http ${status} ${statusText}`);
-    if (!body?.trim().startsWith("<")) throw new Error("KCISA non-XML response");
-
+    if (!text?.trim().startsWith("<")) throw new Error("KCISA non-XML response");
     const externalId = `period2-${from}-${to}-p1`;
-    await upsertRawXml({ xml: body, externalId });
+    await upsertRawXml(text, externalId);
     console.log({ saved: true, period: { from, to }, externalId });
   } catch (e) {
     console.error(e.message || e);
