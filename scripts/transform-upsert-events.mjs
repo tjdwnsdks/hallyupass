@@ -1,9 +1,18 @@
-import { buildUrl } from "./lib/http.mjs";
-
-// env
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE;
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE) throw new Error("Missing Supabase env");
+
+function buildUrl(base, path, q = {}) {
+  const u = new URL(path.replace(/^\//, ""), base + "/");
+  u.search = new URLSearchParams(q).toString();
+  return u.toString();
+}
+
+async function fetchJson(url, headers = {}) {
+  const res = await fetch(url, { headers });
+  if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+  return res.json();
+}
 
 async function fetchRawTourapi(limit = 1000) {
   const url = buildUrl(SUPABASE_URL, "/rest/v1/raw_sources", {
@@ -13,14 +22,10 @@ async function fetchRawTourapi(limit = 1000) {
     order: "fetched_at.desc",
     limit: String(limit)
   });
-  const res = await fetch(url, {
-    headers: {
-      "apikey": SUPABASE_SERVICE_ROLE,
-      "Authorization": `Bearer ${SUPABASE_SERVICE_ROLE}`
-    }
+  return fetchJson(url, {
+    "apikey": SUPABASE_SERVICE_ROLE,
+    "Authorization": `Bearer ${SUPABASE_SERVICE_ROLE}`
   });
-  if (!res.ok) throw new Error(`fetch raw failed ${res.status}`);
-  return res.json();
 }
 
 function mapTourapiToEvent(row) {
@@ -32,7 +37,6 @@ function mapTourapiToEvent(row) {
   const date = (s) => {
     const t = String(s ?? "").trim();
     if (!/^\d{8}$/.test(t)) return null;
-    // YYYY-MM-DD 형식으로 저장 or DB가 date면 그대로 보냄
     return `${t.slice(0,4)}-${t.slice(4,6)}-${t.slice(6,8)}`;
   };
   return {
