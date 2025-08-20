@@ -67,6 +67,9 @@ jobs:
 - name: show harvest-tourapi-food.mjs header
   run: sed -n '1,40p' scripts/harvest-tourapi-food.mjs || true
 
+- name: guard stale import
+  run: |
+    node -e "const fs=require('fs');const s=fs.readFileSync('scripts/harvest-tourapi-food.mjs','utf8');if(/encodeKeyOnce\\s*}\\s*from/.test(s)){console.error('ERROR: stale import of encodeKeyOnce found');process.exit(1)}"
 
 
       - name: harvest-food
