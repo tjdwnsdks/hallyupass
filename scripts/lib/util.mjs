@@ -1,16 +1,9 @@
 // scripts/lib/util.mjs
-// 공통 유틸: 쿼리스트링, 날짜, fetch JSON, 키 이중인코딩 방지
-
 export function qs(obj = {}) {
   const p = new URLSearchParams();
   for (const [k, v] of Object.entries(obj)) {
     if (v === undefined || v === null || v === '') continue;
-    // serviceKey는 이미 퍼센트 인코딩일 수 있으니 그대로 사용
-    if (k === 'serviceKey') {
-      p.append(k, String(v));
-    } else {
-      p.append(k, String(v));
-    }
+    p.append(k, String(v));
   }
   return p.toString();
 }
@@ -30,38 +23,30 @@ export function plusDaysYmd(n, base = new Date()) {
 
 export const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-export async function pagedJson(url, { headers = {}, retries = 2 } = {}) {
-  let lastErr;
-  for (let i = 0; i <= retries; i++) {
+export async function pagedJson({ base, path, params, pageParam='pageNo', rowsParam='numOfRows', maxPages=80 }) {
+  const headers = {};
+  for (let page = params?.[pageParam] || 1; page <= maxPages; page++) {
+    const q = new URLSearchParams({ ...params, [pageParam]: page }).toString();
+    const url = `${base}${path}?${q}`;
     const r = await fetch(url, { headers });
-    const ct = r.headers.get('content-type') || '';
-    const head = await r.text();
-    if (ct.includes('application/json') || head.trim().startsWith('{') || head.trim().startsWith('[')) {
-      try { return JSON.parse(head); } catch (e) { lastErr = e; }
-    } else {
-      // 진단용 로그
-      console.error('Non-JSON response head:', head.slice(0, 200));
+    const text = await r.text();
+    if (!text.trim().startsWith('{') && !text.trim().startsWith('[')) {
+      console.error('Non-JSON response head:', text.slice(0, 200));
+      console.error('URL:', url);
       throw new Error('Response is not JSON');
     }
-    await sleep(400 * (i + 1));
+    yield JSON.parse(text);
   }
-  throw lastErr || new Error('pagedJson failed');
 }
 
-/**
- * 공공데이터포털 키 이중 인코딩 방지:
- * - 이미 퍼센트 인코딩 패턴('%AB')이 보이면 그대로 반환
- * - 아니면 encodeURIComponent 한 번만 적용
- */
+/** 공공데이터 키 이중 인코딩 방지 */
 export function encodeKeyOnce(raw) {
   const key = String(raw || '');
-  if (/%[0-9A-Fa-f]{2}/.test(key)) return key;  // 이미 인코딩됨
-  try {
-    // raw가 디코딩 가능한 경우에도, 원본이 인코딩이 아니면 그대로 인코딩 1회
-    decodeURIComponent(key);
-  } catch { /* ignore */ }
+  if (/%[0-9A-Fa-f]{2}/.test(key)) return key;     // 이미 퍼센트 인코딩됨
+  try { decodeURIComponent(key); } catch { /* no-op */ }
   return encodeURIComponent(key);
 }
+
 
 
 // import { buildUrl, getWithPreview, parseJsonOrThrow } from "./http.mjs";
