@@ -1,13 +1,13 @@
-// TourAPI 축제 수집 → raw_sources (패키지 없음)
+// TourAPI 축제 수집 → raw_sources (REST upsert)
 import { qs } from './lib/util.mjs';
 import { upsertRaw } from './lib/db.mjs';
 
-// 디코딩/인코딩 키 모두 수용
+// 디코딩/인코딩 키 모두 수용: 결과는 "한 번만 인코딩된 문자열"
 function normalizeKey(raw) {
   const k = String(raw ?? '');
-  if (/%[0-9A-Fa-f]{2}/.test(k)) return k;  // 이미 퍼센트 인코딩
+  if (/%[0-9A-Fa-f]{2}/.test(k)) return k;     // 이미 퍼센트 포함(인코딩됨)
   try { decodeURIComponent(k); } catch {}
-  return encodeURIComponent(k);
+  return encodeURIComponent(k);                // 디코딩키였다면 1회 인코딩
 }
 
 // YYYYMMDD UTC
@@ -23,12 +23,18 @@ function plusDaysYmd(n, base = new Date()) {
   return ymdUTC(d);
 }
 
+// serviceKey는 직접 붙이고, 나머지만 qs로 인코딩
+function buildUrlWithKey(base, key, params) {
+  const rest = qs(params);
+  return `${base}?serviceKey=${key}${rest ? `&${rest}` : ''}`;
+}
+
 async function fetchPage({key, areaCode, lang, pageNo, startYmd, endYmd}) {
-  const url = `https://apis.data.go.kr/B551011/KorService2/searchFestival2?` + qs({
-    serviceKey: key,
+  const base = 'https://apis.data.go.kr/B551011/KorService2/searchFestival2';
+  const url = buildUrlWithKey(base, key, {
+    _type: 'json',
     MobileOS: 'ETC',
     MobileApp: 'HallyuPass',
-    _type: 'json',
     eventStartDate: startYmd,
     eventEndDate:   endYmd,
     areaCode,
@@ -37,6 +43,8 @@ async function fetchPage({key, areaCode, lang, pageNo, startYmd, endYmd}) {
     pageNo,
     lang
   });
+
+  console.log('[GET]', url);
   const r = await fetch(url, { headers: { Accept: 'application/json' } });
   const txt = await r.text();
   let items = [];
@@ -78,13 +86,9 @@ async function run() {
             event_end:   it.eventenddate   ? `${it.eventenddate.slice(0,4)}-${it.eventenddate.slice(4,6)}-${it.eventenddate.slice(6,8)}`   : null,
             city: it.addr1 || null
           };
-          try {
-            await upsertRaw(row);
-          } catch(err) {
-            console.error('upsert error:', err.message);
-          }
+          try { await upsertRaw(row); } catch(err) { console.error('upsert error:', err.message); }
         }
-        if (items.length < 100) break; // 마지막 페이지
+        if (items.length < 100) break;
       }
     }
   }
