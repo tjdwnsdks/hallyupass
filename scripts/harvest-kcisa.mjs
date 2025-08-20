@@ -1,55 +1,67 @@
-import { qs, todayYmd, plusDaysYmd, encodeKeyOnce } from './lib/util.mjs';
-import { upsert } from './lib/sb.mjs';
+import { getDataGoKrKey } from "./lib/env.mjs";
+import { buildUrl, getWithPreview } from "./lib/http.mjs";
 
-const RAWKEY = process.env.DATA_GO_KR_KCISA || process.env.DATA_GO_KR_KEY;
-const KEY    = encodeKeyOnce(RAWKEY);
+const KEY = getDataGoKrKey("DATA_GO_KR_KCISA"); // 디코딩 키(+/= 포함)
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE;
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE) throw new Error("Missing Supabase env");
 
-const BASE  = 'https://apis.data.go.kr/B553457/cultureInfo'; // Info의 I는 대문자
-const AHEAD = Number(process.env.DAYS_AHEAD || '60');
+const BASE = "https://apis.data.go.kr/B553457";
+const PATH = "cultureinfo/period2";
 
-async function run(){
-  const from = todayYmd(), to = plusDaysYmd(AHEAD);
-  const out=[];
-  for(let page=1; page<=12; page++){
-    const url = `${BASE}/period2?` + qs({
-      serviceKey: KEY,
-      from, to,
-      cPage: page,
-      rows: 50,
-      _type: 'json',   // JSON 강제
-      type: 'json'     // 일부 게이트웨이 호환
-    });
+function ymd(d) { return d.toISOString().slice(0, 10).replace(/-/g, ""); }
+const from = ymd(new Date());
+const to = ymd(new Date(Date.now() + 30 * 86400000));
 
-    const r = await fetch(url);
-    const txt = await r.text();
-    let items=[];
-    try{
-      const j = JSON.parse(txt);
-      items = j?.response?.body?.items || j?.response?.body?.item || j?.items || [];
-    }catch(e){
-      console.error('KCISA non-JSON head:', txt.slice(0,200));
-      console.error('URL:', url);
-      throw e;
-    }
+async function upsertRawXml(xml, externalId = null) {
+  const url = buildUrl(SUPABASE_URL, "/rest/v1/raw_sources",
+    { on_conflict: "source,dataset,external_id,lang" });
 
-    if(!items.length) break;
+  const payload = [{
+    source: "kcisa",
+    dataset: "cultureinfo.period2",
+    external_id: externalId || `kcisa-${Date.now()}`, // XML은 항목별 id가 없을 수 있어 페이지 단위 저장
+    lang: "ko",
+    payload_xml: xml
+  }];
 
-    for(const it of items){
-      const ext = String(it.cul_id || it.id || `${it.title}|${it.startDate}|${it.place}`);
-      out.push({
-        source:'kcisa',
-        dataset:'performance',
-        external_id: ext,
-        lang:'ko',
-        payload: it,
-        event_start: it.startDate?.slice(0,10) || null,
-        event_end: it.endDate?.slice(0,10) || null,
-        city: it.place || null
-      });
-    }
-    if(items.length<50) break;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "apikey": SUPABASE_SERVICE_ROLE,
+      "Authorization": `Bearer ${SUPABASE_SERVICE_ROLE}`,
+      "Content-Type": "application/json",
+      "Prefer": "resolution=merge-duplicates"
+    },
+    body: JSON.stringify(payload)
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(`Supabase upsert raw failed: ${res.status} ${res.statusText} :: ${t.slice(0,400)}`);
   }
-  const res = await upsert('raw_sources', out);
-  console.log('kcisa saved:', res.count);
+  await res.json().catch(() => null);
 }
-run().catch(e=>{ console.error(e); process.exit(1); });
+
+(async () => {
+  try {
+    const params = new URLSearchParams({
+      serviceKey: KEY,
+      pageNo: "1",
+      numOfRows: "50",
+      from,
+      to
+    });
+    const url = `${BASE}/${PATH}?${params.toString()}`;
+
+    // XML 그대로 받음
+    const { head, info } = await getWithPreview(url);
+    if (info.status !== 200) throw new Error(`KCISA http ${info.status} ${info.statusText}`);
+    if (!head || !head.trim().startsWith("<")) throw new Error("KCISA non-XML response");
+
+    await upsertRawXml(head, `period2-${from}-${to}-p1`);
+    console.log({ saved: true, period: { from, to } });
+  } catch (e) {
+    console.error(e.message || e);
+    process.exitCode = 1;
+  }
+})();
