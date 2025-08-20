@@ -48,6 +48,27 @@ jobs:
       - name: harvest-festivals
         run: node scripts/harvest-tourapi-festivals.mjs
 
+- name: show git sha and ref
+  run: |
+    echo "GITHUB_SHA=$GITHUB_SHA"
+    echo "GITHUB_REF_NAME=$GITHUB_REF_NAME"
+
+- name: list scripts tree
+  run: |
+    ls -la
+    echo "--- scripts ---"
+    ls -la scripts || true
+    echo "--- scripts/lib ---"
+    ls -la scripts/lib || true
+
+- name: show util.mjs header
+  run: sed -n '1,120p' scripts/lib/util.mjs || true
+
+- name: show harvest-tourapi-food.mjs header
+  run: sed -n '1,40p' scripts/harvest-tourapi-food.mjs || true
+
+
+
       - name: harvest-food
         run: node scripts/harvest-tourapi-food.mjs
 
@@ -63,7 +84,4 @@ jobs:
 
       - name: transform-food
         run: node scripts/transform-upsert-food.mjs
-
-- name: show harvest-tourapi-food.mjs header
-  run: |
-    sed -n '1,25p' scripts/harvest-tourapi-food.mjs
+ 
