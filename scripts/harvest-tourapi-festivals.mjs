@@ -1,108 +1,65 @@
-import { getDataGoKrKey, ymd } from "./lib/env.mjs";
+// ==== standard header ====
+import { qs, pagedJson } from './lib/util.mjs';
 
-const KEY = getDataGoKrKey("DATA_GO_KR_TOURAPI");
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE;
-if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE) throw new Error("Missing Supabase env");
-
-const DAYS_AHEAD = Number(process.env.DAYS_AHEAD ?? 60);
-const startYmd = ymd(new Date());
-const endYmd = ymd(new Date(Date.now() + DAYS_AHEAD * 86400000));
-const AREACODES = (process.env.AREACODES ?? "1,2").split(",").map(s => s.trim()).filter(Boolean);
-
-const BASE = "https://apis.data.go.kr/B551011";
-const PATH = "KorService2/searchFestival2";
-
-function buildUrl(base, path, q = {}) {
-  const u = new URL(path.replace(/^\//, ""), base + "/");
-  const sp = new URLSearchParams(q);
-  u.search = sp.toString();
-  return u.toString();
+// 공공데이터 키 이중 인코딩 1회만
+function encodeKeyOnce(raw){
+  const key = String(raw ?? '');
+  if (/%[0-9A-Fa-f]{2}/.test(key)) return key; // 이미 퍼센트 인코딩이면 그대로
+  try { decodeURIComponent(key); } catch {}
+  return encodeURIComponent(key);
 }
+// =========================
 
-async function fetchJson(url) {
-  const res = await fetch(url, { headers: { "Accept": "application/json" } });
-  if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
-  return res.json();
-}
+// TourAPI 축제 데이터 수집
+import { createClient } from '@supabase/supabase-js';
 
-async function* pageIter({ base, path, params, pageParam = "pageNo", rowsParam = "numOfRows", maxPages = 80 }) {
-  let page = Number(params[pageParam] ?? 1);
-  const rows = Number(params[rowsParam] ?? 30);
-  for (let i = 0; i < maxPages; i++) {
-    const q = { ...params, [pageParam]: String(page), [rowsParam]: String(rows) };
-    const url = buildUrl(base, path, q);
-    const json = await fetchJson(url);
-    yield json;
-    const totalCount = Number(json?.response?.body?.totalCount ?? 0);
-    const lastPage = Math.ceil(totalCount / rows) || 1;
-    if (page >= lastPage) break;
-    page += 1;
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE
+);
+
+async function run() {
+  const serviceKey = encodeKeyOnce(process.env.DATA_GO_KR_TOURAPI);
+  const langs = (process.env.TOUR_LANGS || 'ko').split(',');
+  const daysAhead = parseInt(process.env.DAYS_AHEAD || '60', 10);
+  const now = new Date();
+  const start = now.toISOString().slice(0,10).replace(/-/g,'');
+  const end = new Date(now.getTime() + daysAhead*86400000).toISOString().slice(0,10).replace(/-/g,'');
+
+  for (const lang of langs) {
+    for (const area of (process.env.AREACODES || '1').split(',')) {
+      const url = `https://apis.data.go.kr/B551011/KorService2/searchFestival2?${qs({
+        serviceKey,
+        MobileOS: 'ETC',
+        MobileApp: 'HallyuPass',
+        _type: 'json',
+        eventStartDate: start,
+        eventEndDate: end,
+        areaCode: area,
+        numOfRows: 50,
+        pageNo: 1,
+        lang
+      })}`;
+
+      console.log(`[GET] ${url}`);
+      const items = await pagedJson(url, 'response.body.items.item');
+
+      for (const row of items) {
+        await supabase.from('raw_sources').insert({
+          dataset: 'festival',
+          source: 'tourapi',
+          lang,
+          contentid: row.contentid,
+          raw: row
+        }).then(({ error }) => {
+          if (error) console.error(error);
+        });
+      }
+    }
   }
 }
 
-async function upsertRaw(items) {
-  if (!items.length) return { inserted: 0 };
-  const url = buildUrl(SUPABASE_URL, "/rest/v1/raw_sources", {
-    on_conflict: "source,dataset,external_id,lang"
-  });
-  const payload = items.map(it => ({
-    source: "tourapi",
-    dataset: "festivals",
-    external_id: String(it.contentid),
-    lang: "ko",
-    payload_json: it
-  }));
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "apikey": SUPABASE_SERVICE_ROLE,
-      "Authorization": `Bearer ${SUPABASE_SERVICE_ROLE}`,
-      "Content-Type": "application/json",
-      "Prefer": "resolution=merge-duplicates"
-    },
-    body: JSON.stringify(payload)
-  });
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error(`Supabase upsert raw failed: ${res.status} ${res.statusText} :: ${t.slice(0,400)}`);
-  }
-  const data = await res.json().catch(() => []);
-  return { inserted: Array.isArray(data) ? data.length : 0 };
-}
-
-async function harvestArea(area) {
-  const params = {
-    serviceKey: KEY,
-    MobileOS: "ETC",
-    MobileApp: "HallyuPass",
-    _type: "json",
-    eventStartDate: startYmd,
-    eventEndDate: endYmd,
-    areaCode: String(area),
-    numOfRows: "30",
-    arrange: "C",
-    pageNo: "1"
-  };
-  const collected = [];
-  for await (const json of pageIter({ base: BASE, path: PATH, params, pageParam: "pageNo", rowsParam: "numOfRows", maxPages: 80 })) {
-    const items = json?.response?.body?.items?.item ?? [];
-    if (Array.isArray(items)) collected.push(...items);
-  }
-  if (!collected.length) return { area, items: 0, upserted: 0 };
-  const { inserted } = await upsertRaw(collected);
-  return { area, items: collected.length, upserted: inserted };
-}
-
-(async () => {
-  try {
-    const results = [];
-    for (const a of AREACODES) results.push(await harvestArea(a));
-    const totalItems = results.reduce((s, x) => s + x.items, 0);
-    const totalUpserts = results.reduce((s, x) => s + x.upserted, 0);
-    console.log({ totalItems, totalUpserts });
-  } catch (e) {
-    console.error(e.message || e);
-    process.exitCode = 1;
-  }
-})();
+run().catch(err => {
+  console.error(err);
+  process.exit(1);
+});
