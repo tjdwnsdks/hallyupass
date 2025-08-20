@@ -2,7 +2,7 @@ name: harvest-tourapi
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */6 * * *"
+    - cron: "0 */6 * * *"  # 6시간마다(UTC)
 
 jobs:
   run:
@@ -23,7 +23,7 @@ jobs:
       - name: Print key state (sanitized)
         run: node scripts/print-key-state.mjs
 
-      - name: Debug TourAPI (auto key normalization)
+      - name: Debug TourAPI (auto key+path)
         run: node scripts/debug-tourapi.mjs
 
       - name: Harvest TourAPI → raw_sources
