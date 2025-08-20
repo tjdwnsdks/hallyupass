@@ -19,7 +19,22 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 20 }
 
-      # KCISA 시크릿이 주입됐는지 여부를 먼저 확인하는 스텝
+      # 현재 체크아웃한 커밋/브랜치와 kcisa 스크립트 내용을 출력
+      - name: Show HEAD and kcisa script
+        run: |
+          echo "BRANCH=$(git rev-parse --abbrev-ref HEAD)"
+          echo "COMMIT=$(git rev-parse HEAD)"
+          echo "--- scripts/debug-kcisa.mjs ---"
+          sed -n '1,160p' scripts/debug-kcisa.mjs
+
+      # 레포에 남아있는 convergence2019 참조를 차단
+      - name: Assert no convergence2019 reference
+        run: |
+          if git grep -n "convergence2019" -- scripts || true; then
+            echo "::error::Found 'convergence2019' in scripts. Replace with cultureinfo API."
+            exit 1
+          fi
+
       - name: Sanity check KCISA secret
         env:
           DATA_GO_KR_KCISA: ${{ secrets.DATA_GO_KR_KCISA }}
@@ -31,11 +46,6 @@ jobs:
       - name: Debug TourAPI
         run: node scripts/debug-tourapi.mjs
 
-      - name: Debug KCISA
-        if: ${{ env.DATA_GO_KR_KCISA != '' }}
+      - name: Debug KCISA (cultureInfo)
         env:
-          DATA_GO_KR_KCISA: ${{ secrets.DATA_GO_KR_KCISA }}
-        run: node scripts/debug-kcisa.mjs
-
-      - name: Harvest festivals
-        run: node scripts/harvest-tourapi-festivals.mjs
+          DATA_GO_KR_KCISA: ${{ secrets.DATA_
