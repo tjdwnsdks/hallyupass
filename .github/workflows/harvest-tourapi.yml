@@ -1,6 +1,3 @@
-# 목적: TourAPI 수집(raw_sources) → 변환(events)
-# 실행: 수동 + 6시간마다(UTC)
-
 name: harvest-tourapi
 
 on:
