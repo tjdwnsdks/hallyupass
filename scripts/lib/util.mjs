@@ -25,27 +25,34 @@ export function plusDaysYmd(n, base = new Date()) {
   return todayYmd(d);
 }
 
-/** sleep */
-export const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+/** 안전한 중첩 경로 접근: "a.b.c" */
+function getByPath(obj, path) {
+  if (!path) return obj;
+  return String(path)
+    .split('.')
+    .reduce((acc, key) => (acc && acc[key] !== undefined ? acc[key] : undefined), obj);
+}
 
-/** 단일 URL JSON fetch */
-export async function pagedJson(url, { headers = {}, retries = 2 } = {}) {
-  let lastErr;
-  for (let i = 0; i <= retries; i++) {
-    const r = await fetch(url, { headers });
-    const text = await r.text();
-    const ct = r.headers.get('content-type') || '';
-    // JSON 판별
-    if (ct.includes('application/json') || text.trim().startsWith('{') || text.trim().startsWith('[')) {
-      try { return JSON.parse(text); } catch (e) { lastErr = e; }
-    } else {
-      console.error('Non-JSON response head:', text.slice(0, 200));
-      console.error('URL:', url);
-      lastErr = new Error('Response is not JSON');
-    }
-    await sleep(400 * (i + 1));
+/** 단일 URL JSON fetch. itemsPath 주면 배열 반환 */
+export async function pagedJson(url, itemsPath) {
+  const r = await fetch(url, { headers: { Accept: 'application/json' } });
+  const text = await r.text();
+  const ct = r.headers.get('content-type') || '';
+  const looksJson = ct.includes('application/json') || text.trim().startsWith('{') || text.trim().startsWith('[');
+
+  if (!looksJson) {
+    console.error('Non-JSON response head:', text.slice(0, 200));
+    console.error('URL:', url);
+    throw new Error('Response is not JSON');
   }
-  throw lastErr || new Error('pagedJson failed');
+
+  const data = JSON.parse(text);
+  if (!itemsPath) return data;
+
+  const items = getByPath(data, itemsPath);
+  if (Array.isArray(items)) return items;
+  if (items == null) return [];
+  return [items];
 }
 
 /** 공공데이터포털 키 이중 인코딩 방지 */
@@ -53,6 +60,6 @@ export function encodeKeyOnce(raw) {
   const key = String(raw ?? '');
   // 이미 퍼센트 인코딩 패턴이면 그대로 사용
   if (/%[0-9A-Fa-f]{2}/.test(key)) return key;
-  try { decodeURIComponent(key); } catch { /* no-op */ }
+  try { decodeURIComponent(key); } catch { /* noop */ }
   return encodeURIComponent(key);
 }
