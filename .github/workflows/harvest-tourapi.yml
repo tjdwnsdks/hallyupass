@@ -6,10 +6,48 @@ name: harvest-tourapi
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "0 */6 * * *"
 
 jobs:
   run:
+    name: harvest-tourapi
     runs-on: ubuntu-latest
+
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
+      DATA_GO_KR_TOURAPI: ${{ secrets.DATA_GO_KR_TOURAPI }}
+      TOUR_LANGS: ko,en,ja,chs,cht
+      DAYS_AHEAD: 60
+      AREACODES: 1,2,3,4,5,6,7,8,31,32,33,34,35,36,37,38,39
+
     steps:
-      - name: Echo
-        run: echo "ok"
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Node 설정
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: TourAPI 키 상태 출력(마스킹)
+        run: node scripts/print-key-state.mjs
+
+      - name: TourAPI 키 지문 출력
+        run: node scripts/print-tourapi-fingerprint.mjs
+
+      - name: TourAPI 디버그(searchFestival2 점검)
+        run: node scripts/debug-tourapi.mjs
+        continue-on-error: true
+
+      - name: 수확 실행(TourAPI → raw_sources)
+        run: |
+          node scripts/harvest-tourapi-festivals.mjs || (echo "30초 후 재시도"; sleep 30; node scripts/harvest-tourapi-festivals.mjs)
+
+      - name: 변환 실행(raw_sources → events)
+        run: node scripts/transform-events.mjs
+
+      - name: 실패 표시
+        if: failure()
+        run: echo "::error:: harvest-tourapi failed"
