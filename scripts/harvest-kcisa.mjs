@@ -1,5 +1,4 @@
-import { getDataGoKrKey } from "./lib/env.mjs";
-import { buildUrl, getWithPreview } from "./lib/http.mjs";
+import { getDataGoKrKey, ymd } from "./lib/env.mjs";
 
 const KEY = getDataGoKrKey("DATA_GO_KR_KCISA"); // 디코딩 키(+/= 포함)
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -9,22 +8,32 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE) throw new Error("Missing Supabase e
 const BASE = "https://apis.data.go.kr/B553457";
 const PATH = "cultureinfo/period2";
 
-function ymd(d) { return d.toISOString().slice(0, 10).replace(/-/g, ""); }
+function buildUrl(base, path, q = {}) {
+  const u = new URL(path.replace(/^\//, ""), base + "/");
+  u.search = new URLSearchParams(q).toString();
+  return u.toString();
+}
+
+async function getText(url) {
+  const res = await fetch(url, { headers: { "Accept": "*/*" } });
+  const head = await res.text();
+  return { head, status: res.status, statusText: res.statusText };
+}
+
 const from = ymd(new Date());
 const to = ymd(new Date(Date.now() + 30 * 86400000));
 
-async function upsertRawXml(xml, externalId = null) {
-  const url = buildUrl(SUPABASE_URL, "/rest/v1/raw_sources",
-    { on_conflict: "source,dataset,external_id,lang" });
-
+async function upsertRawXml(xml, externalId) {
+  const url = buildUrl(SUPABASE_URL, "/rest/v1/raw_sources", {
+    on_conflict: "source,dataset,external_id,lang"
+  });
   const payload = [{
     source: "kcisa",
     dataset: "cultureinfo.period2",
-    external_id: externalId || `kcisa-${Date.now()}`, // XML은 항목별 id가 없을 수 있어 페이지 단위 저장
+    external_id,
     lang: "ko",
     payload_xml: xml
   }];
-
   const res = await fetch(url, {
     method: "POST",
     headers: {
@@ -39,25 +48,20 @@ async function upsertRawXml(xml, externalId = null) {
     const t = await res.text();
     throw new Error(`Supabase upsert raw failed: ${res.status} ${res.statusText} :: ${t.slice(0,400)}`);
   }
-  await res.json().catch(() => null);
 }
 
 (async () => {
   try {
-    const params = new URLSearchParams({
+    const url = buildUrl(BASE, PATH, {
       serviceKey: KEY,
       pageNo: "1",
       numOfRows: "50",
       from,
       to
     });
-    const url = `${BASE}/${PATH}?${params.toString()}`;
-
-    // XML 그대로 받음
-    const { head, info } = await getWithPreview(url);
-    if (info.status !== 200) throw new Error(`KCISA http ${info.status} ${info.statusText}`);
-    if (!head || !head.trim().startsWith("<")) throw new Error("KCISA non-XML response");
-
+    const { head, status, statusText } = await getText(url);
+    if (status !== 200) throw new Error(`KCISA http ${status} ${statusText}`);
+    if (!head?.trim().startsWith("<")) throw new Error("KCISA non-XML response");
     await upsertRawXml(head, `period2-${from}-${to}-p1`);
     console.log({ saved: true, period: { from, to } });
   } catch (e) {
