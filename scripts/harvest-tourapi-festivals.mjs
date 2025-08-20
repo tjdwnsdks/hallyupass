@@ -1,30 +1,33 @@
 import { getDataGoKrKey, ymd } from "./lib/env.mjs";
+import { buildUrl, getJson } from "./lib/http.mjs";
 import { pagedJson } from "./lib/util.mjs";
-import { buildUrl } from "./lib/http.mjs";
 
-// 입력값
 const KEY = getDataGoKrKey("DATA_GO_KR_TOURAPI");
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE;
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE) throw new Error("Missing Supabase env");
 
-// 기간
 const DAYS_AHEAD = Number(process.env.DAYS_AHEAD ?? 60);
 const startYmd = ymd(new Date());
-const endYmd = ymd(new Date(Date.now()+DAYS_AHEAD*86400000));
+const endYmd = ymd(new Date(Date.now() + DAYS_AHEAD * 86400000));
+const AREACODES = (process.env.AREACODES ?? "1,2").split(",").map(s => s.trim()).filter(Boolean);
 
-// 지역
-const AREACODES = (process.env.AREACODES ?? "1,2").split(",").map(s=>s.trim()).filter(Boolean);
-
-// 엔드포인트
 const BASE = "https://apis.data.go.kr/B551011";
-const PATH = "/KorService2/searchFestival2";
+const PATH = "KorService2/searchFestival2";
 
-// Supabase upsert
-async function upsertFestivals(rows){
-  if (!rows.length) return { inserted: 0 };
-  const url = buildUrl(SUPABASE_URL, "/rest/v1/festivals", { on_conflict: "contentid" });
-  const payload = rows.map(mapFestivalRow);
+async function upsertRaw(items) {
+  if (!items.length) return { inserted: 0 };
+  const url = buildUrl(SUPABASE_URL, "/rest/v1/raw_sources",
+    { on_conflict: "source,dataset,external_id,lang" });
+
+  const payload = items.map(it => ({
+    source: "tourapi",
+    dataset: "festivals",
+    external_id: String(it.contentid),
+    lang: "ko",              // 다국어 수집 시 루프에서 언어별로 세팅
+    payload_json: it
+  }));
+
   const res = await fetch(url, {
     method: "POST",
     headers: {
@@ -37,31 +40,13 @@ async function upsertFestivals(rows){
   });
   if (!res.ok) {
     const t = await res.text();
-    throw new Error(`Supabase upsert failed: ${res.status} ${res.statusText} :: ${t.slice(0,400)}`);
+    throw new Error(`Supabase upsert raw failed: ${res.status} ${res.statusText} :: ${t.slice(0,400)}`);
   }
-  const data = await res.json().catch(()=>[]);
+  const data = await res.json().catch(() => []);
   return { inserted: Array.isArray(data) ? data.length : 0 };
 }
 
-function mapFestivalRow(it){
-  return {
-    contentid: String(it.contentid),
-    title: it.title ?? it.eventname ?? null,
-    eventstartdate: it.eventstartdate ?? null,
-    eventenddate: it.eventenddate ?? null,
-    areacode: it.areacode ?? null,
-    sigungucode: it.sigungucode ?? null,
-    addr1: it.addr1 ?? null,
-    mapx: it.mapx ? Number(it.mapx) : null,
-    mapy: it.mapy ? Number(it.mapy) : null,
-    firstimage: it.firstimage ?? null,
-    createdtime: it.createdtime ?? null,
-    modifiedtime: it.modifiedtime ?? null,
-    raw: it
-  };
-}
-
-async function harvestArea(area){
+async function harvestArea(area) {
   const params = {
     serviceKey: KEY,
     MobileOS: "ETC",
@@ -72,7 +57,7 @@ async function harvestArea(area){
     areaCode: String(area),
     numOfRows: "30",
     arrange: "C",
-    pageNo: "1",
+    pageNo: "1"
   };
 
   const collected = [];
@@ -80,27 +65,25 @@ async function harvestArea(area){
     const items = json?.response?.body?.items?.item ?? [];
     if (Array.isArray(items)) collected.push(...items);
   }
-  if (!collected.length) {
-    console.warn(`[area ${area}] no items`);
-    return { area, items: 0, upserted: 0 };
-  }
-  const { inserted } = await upsertFestivals(collected);
+
+  if (!collected.length) return { area, items: 0, upserted: 0 };
+  const { inserted } = await upsertRaw(collected);
   return { area, items: collected.length, upserted: inserted };
 }
 
-(async ()=>{
-  try{
+(async () => {
+  try {
     const results = [];
     for (const a of AREACODES) {
       const r = await harvestArea(a);
       console.log(r);
       results.push(r);
     }
-    const totalIn = results.reduce((s,x)=>s+x.items,0);
-    const totalUp = results.reduce((s,x)=>s+x.upserted,0);
-    console.log({ totalItems: totalIn, totalUpserts: totalUp });
-  }catch(e){
-    console.error(e.message);
+    const totalItems = results.reduce((s, x) => s + x.items, 0);
+    const totalUpserts = results.reduce((s, x) => s + x.upserted, 0);
+    console.log({ totalItems, totalUpserts });
+  } catch (e) {
+    console.error(e.message || e);
     process.exitCode = 1;
   }
 })();
