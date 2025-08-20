@@ -57,10 +57,10 @@ async function tryPing(svc, key) {
         console.log("[PING]", p.r.status, p.r.statusText, p.ct);
         if (!p.ok) { console.log("HEAD:", p.r.text.slice(0, 200)); continue; }
         console.log("OK variant →", { keyVariant: kname, svc });
-        return; // 성공 지점 발견
+        return;
       }
     }
-    throw new Error("No working key/path. 확인: 1) TourAPI(한국관광공사) 승인키 ‘디코딩키’인지 2) 레포 시크릿 값이 동일한지");
+    throw new Error("No working key/path. 데이터포털 TourAPI 디코딩키와 Secret 값을 재확인하세요.");
   } catch (e) {
     console.error(e.message || e);
     process.exitCode = 1;
