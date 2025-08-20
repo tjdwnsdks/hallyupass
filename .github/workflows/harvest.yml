@@ -5,16 +5,11 @@ on:
 jobs:
   run:
     runs-on: ubuntu-latest
-
-    # (4) Environments를 쓰는 경우에만 설정하세요. 환경 이름과 동일해야 합니다.
-    # 사용 안 하면 이 줄 삭제.
-    environment: prod
-
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
-      DATA_GO_KR_TOURAPI: ${{ secrets.DATA_GO_KR_TOURAPI || vars.DATA_GO_KR_TOURAPI }}
-      DATA_GO_KR_KCISA:  ${{ secrets.DATA_GO_KR_KCISA  || vars.DATA_GO_KR_KCISA  }}
+      DATA_GO_KR_TOURAPI: ${{ secrets.DATA_GO_KR_TOURAPI }}
+      DATA_GO_KR_KCISA:  ${{ secrets.DATA_GO_KR_KCISA }}
       TOUR_LANGS: ko,en,ja,chs,cht
       DAYS_AHEAD: 60
       AREACODES: 1,2,3,4,5,6,7,8,31,32,33,34,35,36,37,38,39
@@ -24,11 +19,11 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 20 }
 
-      # (3) 배선 점검 스텝: 시크릿 값이 *주입되었는지*만 확인
+      # 시크릿 주입 확인(키 내용은 출력 안 함)
       - name: Sanity check KCISA secret
         run: node -e "const v=process.env.K||'';console.log({KCISA_set:v.length>0,len:v.length})"
         env:
-          K: ${{ secrets.DATA_GO_KR_KCISA || vars.DATA_GO_KR_KCISA }}
+          K: ${{ env.DATA_GO_KR_KCISA }}
 
       - name: Print key state
         run: node scripts/print-key-state.mjs
@@ -36,7 +31,6 @@ jobs:
       - name: Debug TourAPI
         run: node scripts/debug-tourapi.mjs
 
-      # KCISA 키가 비어 있으면 건너뛰기
       - name: Debug KCISA
         if: ${{ env.DATA_GO_KR_KCISA != '' }}
         run: node scripts/debug-kcisa.mjs
