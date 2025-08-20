@@ -1,20 +1,20 @@
-import crypto from "node:crypto";
-import { getEnv } from "./lib/env.mjs";
-
-function fp(s){ return crypto.createHash("sha256").update(s).digest("hex").slice(0,16); }
-
-const raw = getEnv("DATA_GO_KR_TOURAPI");
-const hasPct = /%/.test(raw);
-let dec1 = raw;
-try { if (/%[0-9A-Fa-f]{2}/.test(raw)) dec1 = decodeURIComponent(raw); } catch {}
-const hasPctAfter = /%/.test(dec1);
+function mask(s){ if(!s) return "(empty)"; const n=s.length; return s[0]+"*".repeat(Math.max(0,n-2))+s[n-1]; }
+const raw = process.env.DATA_GO_KR_TOURAPI || "";
+let decoded = raw, encoded = raw;
+try { decoded = decodeURIComponent(raw); } catch {}
+try { encoded = encodeURIComponent(decoded); } catch {}
 
 const info = {
-  raw_has_pct: hasPct,
-  raw_sample: raw.slice(0,24),
-  raw_fp: fp(raw),
-  dec1_has_pct: hasPctAfter,
-  dec1_sample: dec1.slice(0,24),
-  dec1_fp: fp(dec1)
+  present: !!raw,
+  raw_len: raw.length,
+  raw_has_pct: /%/.test(raw),
+  raw_has_plus: /\+/.test(raw),
+  raw_has_eq: /=/.test(raw),
+  raw_head: mask(raw.slice(0,6)),
+  decoded_len: decoded.length,
+  decoded_has_plus: /\+/.test(decoded),
+  decoded_has_eq: /=/.test(decoded),
+  encoded_len: encoded.length,
+  encoded_has_pct: /%/.test(encoded),
 };
 console.log(JSON.stringify(info, null, 2));
