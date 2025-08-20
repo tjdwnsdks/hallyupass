@@ -1,90 +1,58 @@
-import { getDataGoKrKey } from "./lib/env.mjs";
-import { upsert } from "./lib/sb.mjs";
+// ==== standard header ====
+import { qs, pagedJson } from './lib/util.mjs';
 
-const KEY = getDataGoKrKey("DATA_GO_KR_TOURAPI");
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE;
-if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE) throw new Error("Missing Supabase env");
+// 공공데이터 키 이중 인코딩 1회만
+function encodeKeyOnce(raw){
+  const key = String(raw ?? '');
+  if (/%[0-9A-Fa-f]{2}/.test(key)) return key; // 이미 퍼센트 인코딩이면 그대로
+  try { decodeURIComponent(key); } catch {}
+  return encodeURIComponent(key);
+}
+// =========================
 
-const LANGS = (process.env.TOUR_LANGS ?? "ko,en,ja,chs,cht").split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
-const AREACODES = (process.env.AREACODES ?? "1,2").split(",").map(s => s.trim()).filter(Boolean);
+// TourAPI 음식점 데이터 수집
+import { createClient } from '@supabase/supabase-js';
 
-const BASE = "https://apis.data.go.kr/B551011";
-const PATH_BY_LANG = {
-  ko: "KorService2/searchFood2",
-  en: "EngService2/searchFood2",
-  ja: "JpnService2/searchFood2",
-  chs:"ChsService2/searchFood2",
-  cht:"ChtService2/searchFood2"
-};
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE
+);
 
-function buildUrl(base, path, q = {}) {
-  const u = new URL(path.replace(/^\//, ""), base + "/");
-  u.search = new URLSearchParams(q).toString();
-  return u.toString();
+async function run() {
+  const serviceKey = encodeKeyOnce(process.env.DATA_GO_KR_TOURAPI);
+  const langs = (process.env.TOUR_LANGS || 'ko').split(',');
+
+  for (const lang of langs) {
+    const url = `https://apis.data.go.kr/B551011/KorService1/areaBasedList1?${qs({
+      serviceKey,
+      MobileOS: 'ETC',
+      MobileApp: 'HallyuPass',
+      _type: 'json',
+      contentTypeId: '39', // 음식점
+      areaCode: 1,
+      numOfRows: 50,
+      pageNo: 1,
+      lang
+    })}`;
+
+    console.log(`[GET] ${url}`);
+    const items = await pagedJson(url, 'response.body.items.item');
+
+    for (const row of items) {
+      await supabase.from('raw_sources').insert({
+        dataset: 'food',
+        source: 'tourapi',
+        lang,
+        contentid: row.contentid,
+        raw: row
+      }).then(({ error }) => {
+        if (error) console.error(error);
+      });
+    }
+  }
 }
 
-async function getJson(url) {
-  const res = await fetch(url, { headers: { "Accept": "application/json" } });
-  const text = await res.text();
-  if (!text.trim().startsWith("{")) {
-    console.error("Non-JSON head:", text.slice(0,200));
-    console.error("URL:", url);
-    throw new Error("Response is not JSON");
-  }
-  return JSON.parse(text);
-}
-
-async function harvestLangArea(lang, areaCode) {
-  const path = PATH_BY_LANG[lang] || PATH_BY_LANG.en;
-  let upserts = 0, itemsTotal = 0;
-
-  for (let pageNo = 1; pageNo <= 40; pageNo++) {
-    const url = buildUrl(BASE, path, {
-      serviceKey: KEY,
-      MobileOS: "ETC",
-      MobileApp: "HallyuPass",
-      _type: "json",
-      areaCode,
-      numOfRows: "30",
-      arrange: "C",
-      pageNo: String(pageNo)
-    });
-
-    const j = await getJson(url);
-    const items = j?.response?.body?.items?.item || [];
-    if (!items.length) break;
-    itemsTotal += items.length;
-
-    const rows = items.map(it => ({
-      source: "tourapi",
-      dataset: "food",
-      external_id: String(it.contentid),
-      lang,
-      payload: it,
-      event_start: null,
-      event_end: null,
-      city: it.addr1 || null
-    }));
-
-    const r = await upsert("raw_sources", rows);
-    upserts += r.count;
-
-    if (items.length < 30) break;
-  }
-  return { items: itemsTotal, upserted: upserts };
-}
-
-(async () => {
-  try {
-    const results = [];
-    for (const lang of LANGS) for (const area of AREACODES)
-      results.push(await harvestLangArea(lang, area));
-    const totalItems = results.reduce((s, x) => s + x.items, 0);
-    const totalUpserts = results.reduce((s, x) => s + x.upserted, 0);
-    console.log({ totalItems, totalUpserts });
-  } catch (e) {
-    console.error(e.message || e);
-    process.exitCode = 1;
-  }
-})();
+run().catch(err => {
+  console.error(err);
+  process.exit(1);
+});
