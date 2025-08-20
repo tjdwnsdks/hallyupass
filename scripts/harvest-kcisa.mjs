@@ -59,3 +59,4 @@ async function upsertRawXml(xml, externalId) {
     process.exitCode = 1;
   }
 })();
+
