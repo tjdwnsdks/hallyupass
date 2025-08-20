@@ -1,61 +1,79 @@
-// scripts/harvest-tourapi-food.mjs
-import { qs, pagedJson } from './lib/util.mjs'; // encodeKeyOnce import 없음
-import { createClient } from '@supabase/supabase-js';
+// TourAPI 음식( contentTypeId=39 ) → raw_sources (REST upsert)
+import { qs } from './lib/util.mjs';
+import { upsertRaw } from './lib/db.mjs'; // @supabase/supabase-js 사용 안함
 
-// 디코딩키(raw)와 인코딩키(퍼센트 포함) 모두 수용
-function normalizeServiceKey(raw) {
-  const key = String(raw ?? '');
-  // 이미 퍼센트 인코딩 흔적이 있으면 그대로 사용
-  if (/%[0-9A-Fa-f]{2}/.test(key)) return key;
-  // 디코딩키면 한 번만 인코딩
-  try { decodeURIComponent(key); } catch {}
-  return encodeURIComponent(key);
+// YYYYMMDD UTC
+function ymdUTC(d = new Date()){
+  const y=d.getUTCFullYear(), m=String(d.getUTCMonth()+1).padStart(2,'0'), day=String(d.getUTCDate()).padStart(2,'0');
+  return `${y}${m}${day}`;
+}
+function plusDaysYmd(n, base=new Date()){ const d=new Date(base); d.setUTCDate(d.getUTCDate()+Number(n||0)); return ymdUTC(d); }
+
+// serviceKey는 절대 인코딩하지 않고 그대로 붙임
+function buildUrl(base, rawKey, params){
+  const rest = qs(params);
+  return `${base}?serviceKey=${rawKey}${rest ? `&${rest}` : ''}`;
 }
 
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE);
+async function fetchPage({key, areaCode, lang, pageNo}){
+  const base = 'https://apis.data.go.kr/B551011/KorService2/areaBasedList2';
+  const url = buildUrl(base, key, {
+    _type: 'json',
+    MobileOS: 'ETC',
+    MobileApp: 'HallyuPass',
+    contentTypeId: 39, // 음식
+    areaCode,
+    numOfRows: 100,
+    arrange: 'C',
+    pageNo,
+    lang
+  });
 
-async function run() {
-  const serviceKey = normalizeServiceKey(process.env.DATA_GO_KR_TOURAPI);
+  console.log('[GET]', url);
+  const r = await fetch(url, { headers: { Accept: 'application/json' } });
+  const txt = await r.text();
+  let items=[];
+  try{
+    const j = JSON.parse(txt);
+    items = j?.response?.body?.items?.item || [];
+    if(!Array.isArray(items)) items = items ? [items] : [];
+  }catch(e){
+    console.error('Non-JSON head:', txt.slice(0,200));
+    console.error('URL:', url);
+    throw e;
+  }
+  return items;
+}
+
+async function run(){
+  const key   = process.env.DATA_GO_KR_TOURAPI; // 인코딩 키 그대로
   const langs = (process.env.TOUR_LANGS || 'ko').split(',').map(s=>s.trim()).filter(Boolean);
   const areas = (process.env.AREACODES || '1').split(',').map(s=>s.trim()).filter(Boolean);
 
-  for (const lang of langs) {
-    for (const areaCode of areas) {
-      // TourAPI v2 areaBasedList2 + 음식(contentTypeId=39)
-      const url = `https://apis.data.go.kr/B551011/KorService2/areaBasedList2?` + qs({
-        serviceKey,
-        MobileOS: 'ETC',
-        MobileApp: 'HallyuPass',
-        _type: 'json',
-        contentTypeId: '39',
-        areaCode,
-        numOfRows: '30',
-        arrange: 'C',
-        pageNo: '1',
-        lang,
-      });
+  for(const lang of langs){
+    for(const areaCode of areas){
+      console.log(`[FETCH] food area=${areaCode} lang=${lang}`);
+      for(let page=1; page<=20; page++){
+        const items = await fetchPage({key, areaCode, lang, pageNo: page});
+        if(items.length===0) break;
 
-      console.log('[GET]', url);
-      const items = await pagedJson(url, 'response.body.items.item'); // 배열/단일객체 모두 처리
-
-      for (const it of (items || [])) {
-        const row = {
-          source: 'tourapi',
-          dataset: 'food',
-          external_id: String(it.contentid),
-          lang,
-          payload: it,
-          event_start: null,
-          event_end: null,
-          city: it.addr1 || null,
-        };
-        const { error } = await supabase.from('raw_sources').upsert(row, {
-          onConflict: 'source,dataset,external_id,lang',
-        });
-        if (error) console.error('upsert error:', error.message);
+        for(const it of items){
+          const row = {
+            source: 'tourapi',
+            dataset: 'food',
+            external_id: String(it.contentid),
+            lang,
+            payload: it,
+            event_start: null,
+            event_end: null,
+            city: it.addr1 || null
+          };
+          try{ await upsertRaw(row); }catch(err){ console.error('upsert error:', err.message); }
+        }
+        if(items.length<100) break;
       }
     }
   }
 }
 
-run().catch(e => { console.error(e); process.exit(1); });
+run().catch(e=>{ console.error(e); process.exit(1); });
