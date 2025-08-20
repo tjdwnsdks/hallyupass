@@ -4,7 +4,7 @@ name: harvest-tourapi
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 */6 * * *'
+    - cron: '0 */6 * * *' # 6시간마다 실행 (UTC 기준)
 
 jobs:
   run:
@@ -38,8 +38,19 @@ jobs:
         run: node scripts/debug-tourapi.mjs
         continue-on-error: true
 
-      - name: harvest
+      # ========= Harvest 단계 =========
+      - name: harvest-festivals
         run: node scripts/harvest-tourapi-festivals.mjs
 
+      - name: harvest-food
+        run: node scripts/harvest-tourapi-food.mjs
+
+      - name: harvest-stay
+        run: node scripts/harvest-tourapi-accommodation.mjs
+
+      - name: harvest-course
+        run: node scripts/harvest-tourapi-courses.mjs
+
+      # ========= Transform 단계 =========
       - name: transform
         run: node scripts/transform-events.mjs
