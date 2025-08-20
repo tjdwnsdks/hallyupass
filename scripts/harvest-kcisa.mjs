@@ -16,21 +16,21 @@ function buildUrl(base, path, q = {}) {
 
 async function getText(url) {
   const res = await fetch(url, { headers: { "Accept": "*/*" } });
-  const head = await res.text();
-  return { head, status: res.status, statusText: res.statusText };
+  const body = await res.text();
+  return { body, status: res.status, statusText: res.statusText };
 }
 
 const from = ymd(new Date());
-const to = ymd(new Date(Date.now() + 30 * 86400000));
+const to   = ymd(new Date(Date.now() + 30 * 86400000));
 
-async function upsertRawXml(xml, externalId) {
+async function upsertRawXml({ xml, externalId }) {
   const url = buildUrl(SUPABASE_URL, "/rest/v1/raw_sources", {
     on_conflict: "source,dataset,external_id,lang"
   });
   const payload = [{
     source: "kcisa",
     dataset: "cultureinfo.period2",
-    external_id,
+    external_id: externalId,
     lang: "ko",
     payload_xml: xml
   }];
@@ -56,14 +56,15 @@ async function upsertRawXml(xml, externalId) {
       serviceKey: KEY,
       pageNo: "1",
       numOfRows: "50",
-      from,
-      to
+      from, to
     });
-    const { head, status, statusText } = await getText(url);
+    const { body, status, statusText } = await getText(url);
     if (status !== 200) throw new Error(`KCISA http ${status} ${statusText}`);
-    if (!head?.trim().startsWith("<")) throw new Error("KCISA non-XML response");
-    await upsertRawXml(head, `period2-${from}-${to}-p1`);
-    console.log({ saved: true, period: { from, to } });
+    if (!body?.trim().startsWith("<")) throw new Error("KCISA non-XML response");
+
+    const externalId = `period2-${from}-${to}-p1`;
+    await upsertRawXml({ xml: body, externalId });
+    console.log({ saved: true, period: { from, to }, externalId });
   } catch (e) {
     console.error(e.message || e);
     process.exitCode = 1;
