@@ -44,5 +44,13 @@ jobs:
       - name: harvest food
         run: node scripts/harvest-tourapi-food.mjs
 
+        - name: guard stale import in food script
+  run: |
+    if grep -n "encodeKeyOnce.*from './lib/util.mjs'" scripts/harvest-tourapi-food.mjs; then
+      echo "ERROR: stale import of encodeKeyOnce found"; exit 1
+    fi
+- name: show food header
+  run: sed -n '1,25p' scripts/harvest-tourapi-food.mjs
+
       - name: transform
         run: node scripts/transform-events.mjs
