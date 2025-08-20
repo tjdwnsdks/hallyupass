@@ -2,14 +2,6 @@
 import { qs } from './lib/util.mjs';
 import { upsertRaw } from './lib/db.mjs';
 
-// 디코딩/인코딩 키 모두 수용: 결과는 "한 번만 인코딩된 문자열"
-function normalizeKey(raw) {
-  const k = String(raw ?? '');
-  if (/%[0-9A-Fa-f]{2}/.test(k)) return k;     // 이미 퍼센트 포함(인코딩됨)
-  try { decodeURIComponent(k); } catch {}
-  return encodeURIComponent(k);                // 디코딩키였다면 1회 인코딩
-}
-
 // YYYYMMDD UTC
 function ymdUTC(d = new Date()) {
   const y = d.getUTCFullYear();
@@ -23,15 +15,15 @@ function plusDaysYmd(n, base = new Date()) {
   return ymdUTC(d);
 }
 
-// serviceKey는 직접 붙이고, 나머지만 qs로 인코딩
-function buildUrlWithKey(base, key, params) {
+// serviceKey는 절대 건드리지 않고 그대로 붙임
+function buildUrl(base, rawKey, params) {
   const rest = qs(params);
-  return `${base}?serviceKey=${key}${rest ? `&${rest}` : ''}`;
+  return `${base}?serviceKey=${rawKey}${rest ? `&${rest}` : ''}`;
 }
 
 async function fetchPage({key, areaCode, lang, pageNo, startYmd, endYmd}) {
   const base = 'https://apis.data.go.kr/B551011/KorService2/searchFestival2';
-  const url = buildUrlWithKey(base, key, {
+  const url = buildUrl(base, key, {
     _type: 'json',
     MobileOS: 'ETC',
     MobileApp: 'HallyuPass',
@@ -61,7 +53,7 @@ async function fetchPage({key, areaCode, lang, pageNo, startYmd, endYmd}) {
 }
 
 async function run() {
-  const key   = normalizeKey(process.env.DATA_GO_KR_TOURAPI);
+  const key   = process.env.DATA_GO_KR_TOURAPI;   // 절대 인코딩하지 않음
   const langs = (process.env.TOUR_LANGS || 'ko').split(',').map(s=>s.trim()).filter(Boolean);
   const areas = (process.env.AREACODES || '1').split(',').map(s=>s.trim()).filter(Boolean);
   const ahead = parseInt(process.env.DAYS_AHEAD || '60', 10);
