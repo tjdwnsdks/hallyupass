@@ -16,7 +16,7 @@ jobs:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
       DATA_GO_KR_TOURAPI: ${{ secrets.DATA_GO_KR_TOURAPI }}   # 디코딩 키
-      DATA_GO_KR_KCISA: ${{ secrets.DATA_GO_KR_KCISA }}       # 디코딩 키
+      DATA_GO_KR_KCISA: ${{ secrets.DATA_GO_KR_KCISA || vars.DATA_GO_KR_KCISA }}     # 디코딩 키
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
