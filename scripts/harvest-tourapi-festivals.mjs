@@ -1,6 +1,4 @@
 import { getDataGoKrKey, ymd } from "./lib/env.mjs";
-import { buildUrl, getJson } from "./lib/http.mjs";
-import { pagedJson } from "./lib/util.mjs";
 
 const KEY = getDataGoKrKey("DATA_GO_KR_TOURAPI");
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -15,19 +13,46 @@ const AREACODES = (process.env.AREACODES ?? "1,2").split(",").map(s => s.trim())
 const BASE = "https://apis.data.go.kr/B551011";
 const PATH = "KorService2/searchFestival2";
 
+function buildUrl(base, path, q = {}) {
+  const u = new URL(path.replace(/^\//, ""), base + "/");
+  const sp = new URLSearchParams(q);
+  u.search = sp.toString();
+  return u.toString();
+}
+
+async function fetchJson(url) {
+  const res = await fetch(url, { headers: { "Accept": "application/json" } });
+  if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+  return res.json();
+}
+
+async function* pageIter({ base, path, params, pageParam = "pageNo", rowsParam = "numOfRows", maxPages = 80 }) {
+  let page = Number(params[pageParam] ?? 1);
+  const rows = Number(params[rowsParam] ?? 30);
+  for (let i = 0; i < maxPages; i++) {
+    const q = { ...params, [pageParam]: String(page), [rowsParam]: String(rows) };
+    const url = buildUrl(base, path, q);
+    const json = await fetchJson(url);
+    yield json;
+    const totalCount = Number(json?.response?.body?.totalCount ?? 0);
+    const lastPage = Math.ceil(totalCount / rows) || 1;
+    if (page >= lastPage) break;
+    page += 1;
+  }
+}
+
 async function upsertRaw(items) {
   if (!items.length) return { inserted: 0 };
-  const url = buildUrl(SUPABASE_URL, "/rest/v1/raw_sources",
-    { on_conflict: "source,dataset,external_id,lang" });
-
+  const url = buildUrl(SUPABASE_URL, "/rest/v1/raw_sources", {
+    on_conflict: "source,dataset,external_id,lang"
+  });
   const payload = items.map(it => ({
     source: "tourapi",
     dataset: "festivals",
     external_id: String(it.contentid),
-    lang: "ko",              // 다국어 수집 시 루프에서 언어별로 세팅
+    lang: "ko",
     payload_json: it
   }));
-
   const res = await fetch(url, {
     method: "POST",
     headers: {
@@ -59,13 +84,11 @@ async function harvestArea(area) {
     arrange: "C",
     pageNo: "1"
   };
-
   const collected = [];
-  for await (const json of pagedJson({ base: BASE, path: PATH, params, pageParam: "pageNo", rowsParam: "numOfRows", maxPages: 80 })) {
+  for await (const json of pageIter({ base: BASE, path: PATH, params, pageParam: "pageNo", rowsParam: "numOfRows", maxPages: 80 })) {
     const items = json?.response?.body?.items?.item ?? [];
     if (Array.isArray(items)) collected.push(...items);
   }
-
   if (!collected.length) return { area, items: 0, upserted: 0 };
   const { inserted } = await upsertRaw(collected);
   return { area, items: collected.length, upserted: inserted };
@@ -74,11 +97,7 @@ async function harvestArea(area) {
 (async () => {
   try {
     const results = [];
-    for (const a of AREACODES) {
-      const r = await harvestArea(a);
-      console.log(r);
-      results.push(r);
-    }
+    for (const a of AREACODES) results.push(await harvestArea(a));
     const totalItems = results.reduce((s, x) => s + x.items, 0);
     const totalUpserts = results.reduce((s, x) => s + x.upserted, 0);
     console.log({ totalItems, totalUpserts });
