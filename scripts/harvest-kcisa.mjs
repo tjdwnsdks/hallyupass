@@ -17,8 +17,9 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 20 }
 
-      - name: Debug KCISA
-        run: node scripts/harvest-kcisa.mjs  # 현재는 원문 적재(디버그 겸용)
+      # 현재는 원문만 적재(디버그 겸용)
+      - name: Harvest KCISA → raw_sources (XML)
+        run: node scripts/harvest-kcisa.mjs
 
       - name: Verify KCISA saved to raw_sources
         run: |
