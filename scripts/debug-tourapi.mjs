@@ -5,8 +5,8 @@ function buildUrl(base, path, q = {}) {
   u.search = new URLSearchParams(q).toString();
   return u.toString();
 }
-async function get(url) {
-  const res = await fetch(url, { headers: { Accept: "application/json" } });
+async function req(url) {
+  const res = await fetch(url, { headers: { Accept: "*/*" } });
   const text = await res.text();
   const ct = res.headers.get("content-type") || "";
   return { ok: res.ok, status: res.status, statusText: res.statusText, ct, text, url };
@@ -16,65 +16,51 @@ const BASE = "https://apis.data.go.kr/B551011";
 const today = ymd(new Date());
 const in30  = ymd(new Date(Date.now() + 30*86400000));
 
-function variantsFromEnv() {
+function keyVariants() {
   const raw = process.env.DATA_GO_KR_TOURAPI || "";
   const out = new Map();
   out.set("raw", raw);
-  try { out.set("decoded", decodeURIComponent(raw)); } catch { /* noop */ }
+  try { out.set("decoded", decodeURIComponent(raw)); } catch {}
   const base = out.get("decoded") || raw;
-  try { out.set("encoded", encodeURIComponent(base)); } catch { /* noop */ }
-  return [...out.entries()]; // [ [name, key], ... ]
+  try { out.set("encoded", encodeURIComponent(base)); } catch {}
+  return [...out.entries()];
 }
 
-async function tryHealth(key){
-  const ping = buildUrl(BASE, "KorService2/areaCode1", {
+const services = [
+  "KorService2/areaCode1",
+  "KorService1/areaCode1",
+  "KorService/areaCode1",
+  "KorService2/areaCode",
+  "KorService1/areaCode",
+];
+
+async function tryPing(svc, key) {
+  const url = buildUrl(BASE, svc, {
     serviceKey: key, MobileOS: "ETC", MobileApp: "HallyuPass", _type: "json", numOfRows: "1", pageNo: "1"
   });
-  const r = await get(ping);
-  if (!/json/i.test(r.ct)) return { ok: false, r };
+  const r = await req(url);
+  if (!/json/i.test(r.ct)) return { ok:false, r };
   try {
     const j = JSON.parse(r.text);
     const code = j?.response?.header?.resultCode;
     return { ok: code === "0000", r, code };
-  } catch { return { ok: false, r }; }
-}
-
-async function tryFestival(key){
-  const fest = buildUrl(BASE, "KorService2/searchFestival2", {
-    serviceKey: key, MobileOS: "ETC", MobileApp: "HallyuPass", _type: "json",
-    eventStartDate: today, eventEndDate: in30, areaCode: "1", numOfRows: "5", arrange: "C", pageNo: "1"
-  });
-  const r = await get(fest);
-  if (!/json/i.test(r.ct)) return { ok: false, r };
-  try {
-    const j = JSON.parse(r.text);
-    const items = j?.response?.body?.items?.item ?? [];
-    return { ok: Array.isArray(items), r, count: Array.isArray(items) ? items.length : 0 };
-  } catch { return { ok: false, r }; }
+  } catch { return { ok:false, r }; }
 }
 
 (async () => {
   try {
-    const variants = variantsFromEnv();
-    for (const [name, key] of variants) {
+    for (const [kname, key] of keyVariants()) {
       if (!key) continue;
-      console.log(`== Try key variant: ${name} ==`);
-      const h = await tryHealth(key);
-      console.log("[PING]", h.r.status, h.r.statusText, h.r.ct);
-      if (!h.ok) {
-        console.log("PING_HEAD:", h.r.text.slice(0, 200));
-        continue;
+      for (const svc of services) {
+        console.log(`== key:${kname} path:${svc}`);
+        const p = await tryPing(svc, key);
+        console.log("[PING]", p.r.status, p.r.statusText, p.ct);
+        if (!p.ok) { console.log("HEAD:", p.r.text.slice(0, 200)); continue; }
+        console.log("OK variant →", { keyVariant: kname, svc });
+        return; // 성공 지점 발견
       }
-      const f = await tryFestival(key);
-      console.log("[FEST]", f.r.status, f.r.statusText, f.r.ct);
-      if (!f.ok) {
-        console.log("FEST_HEAD:", f.r.text.slice(0, 200));
-        continue;
-      }
-      console.log("items.length =", f.count, "variant=", name);
-      return; // 성공
     }
-    throw new Error("All key variants failed. Check secret value and API subscription.");
+    throw new Error("No working key/path. 확인: 1) TourAPI(한국관광공사) 승인키 ‘디코딩키’인지 2) 레포 시크릿 값이 동일한지");
   } catch (e) {
     console.error(e.message || e);
     process.exitCode = 1;
