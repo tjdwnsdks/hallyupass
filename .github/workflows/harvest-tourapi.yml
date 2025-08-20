@@ -1,0 +1,30 @@
+name: harvest-tourapi
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */6 * * *"  # 6시간마다(UTC)
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
+      DATA_GO_KR_TOURAPI: ${{ secrets.DATA_GO_KR_TOURAPI }}
+      TOUR_LANGS: ko,en,ja,chs,cht
+      DAYS_AHEAD: 60
+      AREACODES: 1,2,3,4,5,6,7,8,31,32,33,34,35,36,37,38,39
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+
+      - name: Debug TourAPI
+        run: node scripts/debug-tourapi.mjs
+
+      - name: Harvest TourAPI → raw_sources
+        run: node scripts/harvest-tourapi-festivals.mjs
+
+      - name: Transform raw_sources → events
+        run: node scripts/transform-events.mjs
