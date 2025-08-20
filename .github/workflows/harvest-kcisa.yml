@@ -1,0 +1,27 @@
+name: harvest-kcisa
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */12 * * *" # 12시간마다(UTC)
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
+      DATA_GO_KR_KCISA: ${{ secrets.DATA_GO_KR_KCISA }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+
+      - name: Debug KCISA
+        run: node scripts/debug-kcisa.mjs
+
+      - name: Harvest KCISA → raw_sources
+        run: node scripts/harvest-kcisa.mjs
+
+      - name: Transform raw_sources → events
+        run: node scripts/transform-events.mjs
