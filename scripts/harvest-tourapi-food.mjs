@@ -1,3 +1,4 @@
+// scripts/harvest-tourapi-food.v2.mjs
 // ==== standard header ====
 import { qs, pagedJson } from './lib/util.mjs';
 
@@ -38,7 +39,7 @@ async function run() {
       });
 
       console.log('[GET]', url);
-      const items = await pagedJson(url, 'response.body.items.item'); // 배열 또는 단일객체→배열 처리
+      const items = await pagedJson(url, 'response.body.items.item'); // 배열 또는 단일객체→배열
 
       for (const it of items) {
         const row = {
