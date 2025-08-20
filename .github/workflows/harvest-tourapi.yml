@@ -1,10 +1,9 @@
-# .github/workflows/harvest-tourapi.yml
 name: harvest-tourapi
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */6 * * *" # 6시간마다 실행 (UTC 기준)
+    - cron: "0 */6 * * *"  # 6시간마다(UTC)
 
 jobs:
   run:
@@ -20,37 +19,32 @@ jobs:
       AREACODES: "1,2,3,4,5,6,7,8,31,32,33,34,35,36,37,38,39"
 
     steps:
-      - name: checkout
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: setup-node
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - name: print-key-state
-        run: node scripts/print-key-state.mjs
+      # 진단: 현재 저장된 스크립트 헤더 출력
+      - name: Show food script header
+        run: sed -n '1,30p' scripts/harvest-tourapi-food.mjs || true
 
-      - name: print-fingerprint
-        run: node scripts/print-tourapi-fingerprint.mjs
+      # 가드: 오래된 import가 남아있으면 바로 실패
+      - name: Guard stale import (food)
+        run: |
+          if grep -n "encodeKeyOnce.*from './lib/util.mjs'" scripts/harvest-tourapi-food.mjs; then
+            echo "ERROR: stale import found in food script"; exit 1
+          fi
 
-      - name: debug-tourapi
-        run: node scripts/debug-tourapi.mjs
-        continue-on-error: true
-
-      - name: harvest festivals
+      # 수집
+      - name: Harvest festivals
         run: node scripts/harvest-tourapi-festivals.mjs
 
-      - name: harvest food
+      - name: Harvest food
         run: node scripts/harvest-tourapi-food.mjs
 
-        - name: guard stale import in food script
-  run: |
-    if grep -n "encodeKeyOnce.*from './lib/util.mjs'" scripts/harvest-tourapi-food.mjs; then
-      echo "ERROR: stale import of encodeKeyOnce found"; exit 1
-    fi
-- name: show food header
-  run: sed -n '1,25p' scripts/harvest-tourapi-food.mjs
-
-      - name: transform
+      # 변환(필요 시 유지/삭제)
+      - name: Transform events
         run: node scripts/transform-events.mjs
