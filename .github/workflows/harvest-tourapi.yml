@@ -2,7 +2,7 @@ name: harvest-tourapi
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */6 * * *"
+    - cron: "0 */6 * * *"  # 6시간마다(UTC)
 
 jobs:
   run:
@@ -22,6 +22,10 @@ jobs:
 
       - name: Print key state (sanitized)
         run: node scripts/print-key-state.mjs
+
+      # << 여기 추가 >>
+      - name: Print TourAPI fingerprint
+        run: node scripts/print-tourapi-fingerprint.mjs
 
       - name: Debug TourAPI (direct festival probe)
         run: node scripts/debug-tourapi.mjs
