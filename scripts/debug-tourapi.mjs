@@ -1,13 +1,10 @@
-import { getDataGoKrKey, ymd } from "./lib/env.mjs";
-
-const KEY = getDataGoKrKey("DATA_GO_KR_TOURAPI");
+import { ymd } from "./lib/env.mjs";
 
 function buildUrl(base, path, q = {}) {
   const u = new URL(path.replace(/^\//, ""), base + "/");
   u.search = new URLSearchParams(q).toString();
   return u.toString();
 }
-
 async function get(url) {
   const res = await fetch(url, { headers: { Accept: "application/json" } });
   const text = await res.text();
@@ -19,42 +16,65 @@ const BASE = "https://apis.data.go.kr/B551011";
 const today = ymd(new Date());
 const in30  = ymd(new Date(Date.now() + 30*86400000));
 
+function variantsFromEnv() {
+  const raw = process.env.DATA_GO_KR_TOURAPI || "";
+  const out = new Map();
+  out.set("raw", raw);
+  try { out.set("decoded", decodeURIComponent(raw)); } catch { /* noop */ }
+  const base = out.get("decoded") || raw;
+  try { out.set("encoded", encodeURIComponent(base)); } catch { /* noop */ }
+  return [...out.entries()]; // [ [name, key], ... ]
+}
+
+async function tryHealth(key){
+  const ping = buildUrl(BASE, "KorService2/areaCode1", {
+    serviceKey: key, MobileOS: "ETC", MobileApp: "HallyuPass", _type: "json", numOfRows: "1", pageNo: "1"
+  });
+  const r = await get(ping);
+  if (!/json/i.test(r.ct)) return { ok: false, r };
+  try {
+    const j = JSON.parse(r.text);
+    const code = j?.response?.header?.resultCode;
+    return { ok: code === "0000", r, code };
+  } catch { return { ok: false, r }; }
+}
+
+async function tryFestival(key){
+  const fest = buildUrl(BASE, "KorService2/searchFestival2", {
+    serviceKey: key, MobileOS: "ETC", MobileApp: "HallyuPass", _type: "json",
+    eventStartDate: today, eventEndDate: in30, areaCode: "1", numOfRows: "5", arrange: "C", pageNo: "1"
+  });
+  const r = await get(fest);
+  if (!/json/i.test(r.ct)) return { ok: false, r };
+  try {
+    const j = JSON.parse(r.text);
+    const items = j?.response?.body?.items?.item ?? [];
+    return { ok: Array.isArray(items), r, count: Array.isArray(items) ? items.length : 0 };
+  } catch { return { ok: false, r }; }
+}
+
 (async () => {
   try {
-    // 1) 헬스체크: 가장 단순한 JSON 엔드포인트(지역코드 목록)
-    const ping = buildUrl(BASE, "KorService2/areaCode1", {
-      serviceKey: KEY, MobileOS: "ETC", MobileApp: "HallyuPass", _type: "json", numOfRows: "1", pageNo: "1"
-    });
-    const hp = await get(ping);
-    console.log("[PING]", hp.status, hp.statusText, hp.ct, hp.url);
-    if (!hp.ok || !/json/i.test(hp.ct)) {
-      console.log("PING_BODY_HEAD:", hp.text.slice(0, 300));
-      throw new Error("TourAPI healthcheck failed (key or gateway issue).");
+    const variants = variantsFromEnv();
+    for (const [name, key] of variants) {
+      if (!key) continue;
+      console.log(`== Try key variant: ${name} ==`);
+      const h = await tryHealth(key);
+      console.log("[PING]", h.r.status, h.r.statusText, h.r.ct);
+      if (!h.ok) {
+        console.log("PING_HEAD:", h.r.text.slice(0, 200));
+        continue;
+      }
+      const f = await tryFestival(key);
+      console.log("[FEST]", f.r.status, f.r.statusText, f.r.ct);
+      if (!f.ok) {
+        console.log("FEST_HEAD:", f.r.text.slice(0, 200));
+        continue;
+      }
+      console.log("items.length =", f.count, "variant=", name);
+      return; // 성공
     }
-
-    // 2) 실제 축제 검색 호출
-    const fest = buildUrl(BASE, "KorService2/searchFestival2", {
-      serviceKey: KEY,
-      MobileOS: "ETC",
-      MobileApp: "HallyuPass",
-      _type: "json",
-      eventStartDate: today,
-      eventEndDate: in30,
-      areaCode: "1",
-      numOfRows: "5",
-      arrange: "C",
-      pageNo: "1"
-    });
-    const fr = await get(fest);
-    console.log("[GET]", fr.status, fr.statusText, fr.ct, fr.url);
-    if (!/json/i.test(fr.ct)) {
-      console.log("NonJSON head:", fr.text.slice(0, 300));
-      throw new Error(`TourAPI returned non-JSON: ${fr.status} ${fr.statusText}`);
-    }
-    // JSON 파싱 확인
-    const json = JSON.parse(fr.text);
-    const items = json?.response?.body?.items?.item ?? [];
-    console.log("items.length =", Array.isArray(items) ? items.length : 0);
+    throw new Error("All key variants failed. Check secret value and API subscription.");
   } catch (e) {
     console.error(e.message || e);
     process.exitCode = 1;
