@@ -17,6 +17,6 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 20 }
 
-      # 현재는 원문만 적재(파싱 보류)
+      # 현재는 원문(XML)만 raw_sources에 저장
       - name: Harvest KCISA → raw_sources (XML)
         run: node scripts/harvest-kcisa.mjs
