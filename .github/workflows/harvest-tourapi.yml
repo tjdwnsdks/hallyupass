@@ -38,7 +38,7 @@ jobs:
         run: node scripts/debug-tourapi.mjs
         continue-on-error: true
 
-      # ========= Harvest 단계 =========
+      # ========= Harvest =========
       - name: harvest-festivals
         run: node scripts/harvest-tourapi-festivals.mjs
 
@@ -51,6 +51,9 @@ jobs:
       - name: harvest-course
         run: node scripts/harvest-tourapi-courses.mjs
 
-      # ========= Transform 단계 =========
-      - name: transform
+      # ========= Transform =========
+      - name: transform-events
         run: node scripts/transform-events.mjs
+
+      - name: transform-food
+        run: node scripts/transform-upsert-food.mjs
