@@ -1,58 +1,54 @@
-// ==== standard header ====
-import { qs, pagedJson } from './lib/util.mjs';
+// TourAPI 숙박(contentTypeId=32) → raw_sources(dataset: 'stay')
+import { qs } from './lib/util.mjs';
+import { upsertRaw } from './lib/db.mjs';
 
-// 공공데이터 키 이중 인코딩 1회만
-function encodeKeyOnce(raw){
-  const key = String(raw ?? '');
-  if (/%[0-9A-Fa-f]{2}/.test(key)) return key; // 이미 퍼센트 인코딩이면 그대로
-  try { decodeURIComponent(key); } catch {}
-  return encodeURIComponent(key);
+function buildUrl(base, key, params){
+  const rest = qs(params);
+  return `${base}?serviceKey=${key}${rest ? `&${rest}` : ''}`;
 }
-// =========================
 
-// TourAPI 숙박 데이터 수집
-import { createClient } from '@supabase/supabase-js';
+async function fetchPage({ key, areaCode, lang, pageNo }){
+  const base = 'https://apis.data.go.kr/B551011/KorService2/areaBasedList2';
+  const url = buildUrl(base, key, {
+    _type:'json', MobileOS:'ETC', MobileApp:'HallyuPass',
+    contentTypeId:32, areaCode, numOfRows:100, arrange:'C', pageNo, lang
+  });
+  console.log('[GET stay]', url);
+  const r = await fetch(url, { headers:{Accept:'application/json'} });
+  const txt = await r.text();
+  let items=[];
+  try{
+    const j = JSON.parse(txt);
+    items = j?.response?.body?.items?.item || [];
+    if(!Array.isArray(items)) items = items ? [items] : [];
+  }catch(e){
+    console.error('Non-JSON head:', txt.slice(0,200));
+    console.error('URL:', url);
+    throw e;
+  }
+  return items;
+}
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE
-);
+async function run(){
+  const key   = process.env.DATA_GO_KR_TOURAPI; // 인코딩 키
+  const langs = (process.env.TOUR_LANGS||'ko').split(',').map(s=>s.trim()).filter(Boolean);
+  const areas = (process.env.AREACODES||'1').split(',').map(s=>s.trim()).filter(Boolean);
 
-async function run() {
-  const serviceKey = encodeKeyOnce(process.env.DATA_GO_KR_TOURAPI);
-  const langs = (process.env.TOUR_LANGS || 'ko').split(',');
-
-  for (const lang of langs) {
-    const url = `https://apis.data.go.kr/B551011/KorService1/areaBasedList1?${qs({
-      serviceKey,
-      MobileOS: 'ETC',
-      MobileApp: 'HallyuPass',
-      _type: 'json',
-      contentTypeId: '32', // 숙박
-      areaCode: 1,
-      numOfRows: 50,
-      pageNo: 1,
-      lang
-    })}`;
-
-    console.log(`[GET] ${url}`);
-    const items = await pagedJson(url, 'response.body.items.item');
-
-    for (const row of items) {
-      await supabase.from('raw_sources').insert({
-        dataset: 'stay',
-        source: 'tourapi',
-        lang,
-        contentid: row.contentid,
-        raw: row
-      }).then(({ error }) => {
-        if (error) console.error(error);
-      });
+  for(const lang of langs){
+    for(const areaCode of areas){
+      console.log(`[FETCH] stay area=${areaCode} lang=${lang}`);
+      for(let page=1; page<=20; page++){
+        const items = await fetchPage({ key, areaCode, lang, pageNo:page });
+        if(items.length===0) break;
+        for(const it of items){
+          await upsertRaw({
+            source:'tourapi', dataset:'stay', external_id:String(it.contentid),
+            lang, payload:it, event_start:null, event_end:null, city:it.addr1||null
+          }).catch(err=>console.error('upsert error:', err.message));
+        }
+        if(items.length<100) break;
+      }
     }
   }
 }
-
-run().catch(err => {
-  console.error(err);
-  process.exit(1);
-});
+run().catch(e=>{ console.error(e); process.exit(1); });
