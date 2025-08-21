@@ -3,20 +3,18 @@ name: harvest-tourapi
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */6 * * *"  # 6시간마다(UTC)
+    - cron: '0 */6 * * *'   # 6시간마다(UTC)
 
 jobs:
-  run:
-    name: harvest-tourapi
+  harvest:
     runs-on: ubuntu-latest
-
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
       DATA_GO_KR_TOURAPI: ${{ secrets.DATA_GO_KR_TOURAPI }}
       TOUR_LANGS: ko,en,ja,chs,cht
-      DAYS_AHEAD: "60"
-      AREACODES: "1,2,3,4,5,6,7,8,31,32,33,34,35,36,37,38,39"
+      DAYS_AHEAD: '60'
+      AREACODES: '1,2,3,4,5,6,7,8,31,32,33,34,35,36,37,38,39'
 
     steps:
       - name: Checkout
@@ -25,18 +23,19 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: '20'
 
-      # 진단: 현재 저장된 스크립트 헤더 출력
-      - name: Show food script header
-        run: sed -n '1,30p' scripts/harvest-tourapi-food.mjs || true
-
-      # 가드: 오래된 import가 남아있으면 바로 실패
-      - name: Guard stale import (food)
+      # 진단: 스크립트 헤더 노출 및 supabase-js 잔존 검사
+      - name: Show script headers
         run: |
-          if grep -n "encodeKeyOnce.*from './lib/util.mjs'" scripts/harvest-tourapi-food.mjs; then
-            echo "ERROR: stale import found in food script"; exit 1
-          fi
+          sed -n '1,25p' scripts/harvest-tourapi-festivals.mjs || true
+          sed -n '1,25p' scripts/harvest-tourapi-food.mjs || true
+          sed -n '1,25p' scripts/harvest-tourapi-stay.mjs || true
+          sed -n '1,25p' scripts/harvest-tourapi-attractions.mjs || true
+
+      - name: Guard no supabase-js import
+        run: |
+          ! grep -R "@supabase/supabase-js" scripts || (echo "ERROR: supabase-js import 발견"; exit 1)
 
       # 수집
       - name: Harvest festivals
@@ -45,13 +44,8 @@ jobs:
       - name: Harvest food
         run: node scripts/harvest-tourapi-food.mjs
 
-- name: Harvest stay
+      - name: Harvest stay
         run: node scripts/harvest-tourapi-stay.mjs
 
       - name: Harvest attractions
         run: node scripts/harvest-tourapi-attractions.mjs
-
-
-      # 변환(필요 시 유지/삭제)
-      - name: Transform events
-        run: node scripts/transform-events.mjs
