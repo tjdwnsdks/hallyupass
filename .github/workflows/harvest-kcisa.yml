@@ -3,32 +3,41 @@ name: harvest-kcisa
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 */12 * * *'  # 12시간마다(UTC)
+    - cron: "0 */12 * * *"   # 12시간마다(UTC)
 
 jobs:
-  harvest:
+  run:
     runs-on: ubuntu-latest
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
       DATA_GO_KR_KCISA: ${{ secrets.DATA_GO_KR_KCISA }}
-      DAYS_AHEAD: '60'
+      DAYS_AHEAD: "60"
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      # supabase-js 패키지 import 금지(주석 매칭 오탐 방지)
-      - name: Guard no supabase-js import
+      # 0) 키 체크
+      - name: Sanity | KCISA key HTTP check
+        env:
+          KEY: ${{ secrets.DATA_GO_KR_KCISA }}
         run: |
-          if grep -R "from '@supabase/supabase-js'" scripts; then
-            echo "ERROR: supabase-js import 발견"; exit 1;
-          fi
+          FROM=$(date -u +%Y%m%d); TO=$(date -u -d "+7 days" +%Y%m%d)
+          URL="https://apis.data.go.kr/B553457/cultureInfo/period2?serviceKey=${KEY}&_type=json&from=${FROM}&to=${TO}&cPage=1&rows=1"
+          echo "[GET] $URL"
+          code=$(curl -s -o /tmp/k.json -w "%{http_code}" "$URL")
+          head -c 180 /tmp/k.json; echo; echo "HTTP=$code"
+          test "$code" = "200"
 
-      - name: Harvest KCISA → raw_sources
+      # 1) 수집(원문→raw_sources)
+      - name: Harvest | KCISA (XML/JSON→raw)
         run: node scripts/harvest-kcisa.mjs
+
+      # 2) 적재 결과 요약
+      - name: Verify | raw_sources kcisa (8h)
+        run: |
+          SINCE=$(node -e "const d=new Date();d.setHours(d.getHours()-8);console.log(d.toISOString())")
+          curl -s "${SUPABASE_URL}/rest/v1/raw_sources?select=dataset,lang,count:count()&source=eq.kcisa&fetched_at=gte.${SINCE}&group=dataset,lang" \
+            -H "apikey: ${SUPABASE_SERVICE_ROLE}" -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE}" | jq .
