@@ -3,41 +3,52 @@ name: harvest-kcisa
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */12 * * *"   # 12시간마다(UTC)
+    # 12시간마다 실행
+    - cron: '0 */12 * * *'
 
 jobs:
-  run:
+  harvest-kcisa:
     runs-on: ubuntu-latest
-    env:
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
-      DATA_GO_KR_KCISA: ${{ secrets.DATA_GO_KR_KCISA }}
-      DAYS_AHEAD: "60"
-
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: "20" }
 
-      # 0) 키 체크
+      - name: Use Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install deps
+        run: npm install
+
+      # ✅ KCISA 키 점검
       - name: Sanity | KCISA key HTTP check
         env:
-          KEY: ${{ secrets.DATA_GO_KR_KCISA }}
+          KEY: ${{ secrets.DATA_GO_KR_KCISA }} # 👉 디코딩키를 넣어야 함
         run: |
           FROM=$(date -u +%Y%m%d); TO=$(date -u -d "+7 days" +%Y%m%d)
-          URL="https://apis.data.go.kr/B553457/cultureInfo/period2?serviceKey=${KEY}&_type=json&from=${FROM}&to=${TO}&cPage=1&rows=1"
-          echo "[GET] $URL"
-          code=$(curl -s -o /tmp/k.json -w "%{http_code}" "$URL")
-          head -c 180 /tmp/k.json; echo; echo "HTTP=$code"
+          # Python으로 강제 퍼센트 인코딩
+          ENC_KEY=$(python - <<'PY'
+import os, urllib.parse
+print(urllib.parse.quote(os.environ["KEY"], safe=""))
+PY
+)
+          echo "[GET] from=$FROM to=$TO"
+          code=$(curl -s -o /tmp/k.json -w "%{http_code}" -G \
+            "https://apis.data.go.kr/B553457/cultureInfo/period2" \
+            --data-urlencode "serviceKey=${ENC_KEY}" \
+            --data-urlencode "_type=json" \
+            --data-urlencode "from=${FROM}" \
+            --data-urlencode "to=${TO}" \
+            --data-urlencode "cPage=1" \
+            --data-urlencode "rows=1")
+          head -c 200 /tmp/k.json; echo; echo "HTTP=$code"
           test "$code" = "200"
 
-      # 1) 수집(원문→raw_sources)
-      - name: Harvest | KCISA (XML/JSON→raw)
+      # ✅ 실제 KCISA 수확 실행
+      - name: Run harvest KCISA
         run: node scripts/harvest-kcisa.mjs
-
-      # 2) 적재 결과 요약
-      - name: Verify | raw_sources kcisa (8h)
-        run: |
-          SINCE=$(node -e "const d=new Date();d.setHours(d.getHours()-8);console.log(d.toISOString())")
-          curl -s "${SUPABASE_URL}/rest/v1/raw_sources?select=dataset,lang,count:count()&source=eq.kcisa&fetched_at=gte.${SINCE}&group=dataset,lang" \
-            -H "apikey: ${SUPABASE_SERVICE_ROLE}" -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE}" | jq .
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
+          DATA_GO_KR_KCISA: ${{ secrets.DATA_GO_KR_KCISA }} # 디코딩키
+          DAYS_AHEAD: 60
