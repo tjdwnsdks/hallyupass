@@ -45,6 +45,13 @@ jobs:
       - name: Harvest food
         run: node scripts/harvest-tourapi-food.mjs
 
+- name: Harvest stay
+        run: node scripts/harvest-tourapi-stay.mjs
+
+      - name: Harvest attractions
+        run: node scripts/harvest-tourapi-attractions.mjs
+
+
       # 변환(필요 시 유지/삭제)
       - name: Transform events
         run: node scripts/transform-events.mjs
