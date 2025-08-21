@@ -11,7 +11,8 @@ jobs:
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
-      DATA_GO_KR_TOURAPI: ${{ secrets.DATA_GO_KR_TOURAPI }} # 인코딩 키
+      DATA_GO_KR_TOURAPI: ${{ secrets.DATA_GO_KR_TOURAPI }} # 인코딩키
+      DATA_GO_KR_KEY: ${{ secrets.DATA_GO_KR_TOURAPI }}      # ← 스크립트 호환용 별칭
       TOUR_LANGS: ko,en,ja,chs,cht
       DAYS_AHEAD: "60"
       AREACODES: "1,2,3,4,5,6,7,8,31,32,33,34,35,36,37,38,39"
@@ -22,7 +23,6 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: "20" }
 
-      # 0) TourAPI 키 200 확인
       - name: Sanity | TourAPI key HTTP check
         run: |
           FROM=$(date -u +%Y%m%d)
@@ -33,7 +33,6 @@ jobs:
           head -c 180 /tmp/t.json; echo; echo "HTTP=$CODE"
           test "$CODE" = "200"
 
-      # 1) 수집
       - name: Harvest | festivals
         run: node scripts/harvest-tourapi-festivals.mjs
       - name: Harvest | attractions
@@ -43,13 +42,11 @@ jobs:
       - name: Harvest | stay
         run: node scripts/harvest-tourapi-accommodation.mjs
 
-      # 2) 변환
       - name: Transform | festivals → events
         run: node scripts/transform-events.mjs
       - name: Transform | food/stay/attraction → events
         run: node scripts/transform-places-to-events.mjs
 
-      # 3) 적재 확인: 8시간 내 총건수 0이면 실패로 처리
       - name: Verify | raw_sources counts (8h, fail if zero)
         shell: bash
         run: |
