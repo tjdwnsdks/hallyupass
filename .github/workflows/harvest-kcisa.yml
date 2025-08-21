@@ -11,44 +11,35 @@ jobs:
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
-      DATA_GO_KR_KCISA: ${{ secrets.DATA_GO_KR_KCISA }}  # ← 디코딩키(그대로 저장)
+      DATA_GO_KR_KCISA: ${{ secrets.DATA_GO_KR_KCISA }}  # 디코딩키(원본)
       DAYS_AHEAD: "60"
 
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: "20" }
+        with:
+          node-version: "20"
 
-      # 0) KCISA 키 점검: 비인코딩 vs 인코딩 비교
+      # 0) KCISA 키 점검: raw vs encoded 비교. encoded가 200 아니면 실패.
       - name: Sanity | KCISA key check (raw vs encoded)
+        shell: bash
         run: |
           set -e
           FROM=$(date -u +%Y%m%d); TO=$(date -u -d "+7 days" +%Y%m%d)
 
-          # 인코딩 전/후 키 정보
-          echo "::group::Key state"
-          RAW="${DATA_GO_KR_KCISA}"
-          echo "raw length=${#RAW}"
-          echo "raw contains %? $(echo "$RAW" | grep -q '%' && echo yes || echo no)"
-          ENC_KEY=$(python - <<'PY'
-import os, urllib.parse
-print(urllib.parse.quote(os.environ["DATA_GO_KR_KCISA"], safe=""))
-PY
-)
-          echo "encoded length=${#ENC_KEY}"
-          echo "encoded contains %? $(echo "$ENC_KEY" | grep -q '%' && echo yes || echo no)"
-          echo "::endgroup::"
+          # Node로 URL 인코딩
+          ENC_KEY=$(node -e "console.log(encodeURIComponent(process.env.DATA_GO_KR_KCISA||''))")
 
           BASE="https://apis.data.go.kr/B553457/cultureInfo/period2"
 
-          echo "::group::Try RAW key (expected: fail)"
+          echo "::group::RAW key (expect fail)"
           URL_RAW="${BASE}?serviceKey=${DATA_GO_KR_KCISA}&_type=json&from=${FROM}&to=${TO}&cPage=1&rows=1"
           echo "[GET] $URL_RAW"
           code_raw=$(curl -s -o /tmp/k_raw.json -w "%{http_code}" "$URL_RAW")
           head -c 200 /tmp/k_raw.json; echo; echo "HTTP_RAW=$code_raw"
           echo "::endgroup::"
 
-          echo "::group::Try ENCODED key (expected: 200)"
+          echo "::group::ENCODED key (expect 200)"
           code_enc=$(curl -s -o /tmp/k_enc.json -w "%{http_code}" -G "$BASE" \
             --data-urlencode "serviceKey=${ENC_KEY}" \
             --data-urlencode "_type=json" \
@@ -61,11 +52,11 @@ PY
 
           test "$code_enc" = "200"
 
-      # 1) 수집 (원문→raw_sources)
+      # 1) KCISA 수집 → raw_sources
       - name: Harvest | KCISA
         run: node scripts/harvest-kcisa.mjs
 
-      # 2) 적재 결과 요약 확인
+      # 2) 최근 적재 요약
       - name: Verify | raw_sources kcisa (8h)
         run: |
           SINCE=$(node -e "const d=new Date();d.setHours(d.getHours()-8);console.log(d.toISOString())")
