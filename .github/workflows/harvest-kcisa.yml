@@ -11,7 +11,7 @@ jobs:
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
-      DATA_GO_KR_KCISA: ${{ secrets.DATA_GO_KR_KCISA }}  # 디코딩 키 원문
+      DATA_GO_KR_KCISA: ${{ secrets.DATA_GO_KCISA || secrets.DATA_GO_KR_KCISA }}
       DAYS_AHEAD: "60"
 
     steps:
@@ -19,8 +19,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: "20" }
 
-      # 0) KCISA: 여러 조합을 시도해 200 조합을 찾는다.
-      - name: Sanity | KCISA endpoint/encoding matrix
+      - name: Sanity | KCISA endpoint/param matrix
         id: kcisa_sanity
         shell: bash
         run: |
@@ -30,55 +29,53 @@ jobs:
           ENC=$(node -e "console.log(encodeURIComponent(process.env.DATA_GO_KR_KCISA||''))")
 
           BASES=("https://apis.data.go.kr/B553457/cultureInfo/period2" "https://apis.data.go.kr/B553457/cultureInfo/period")
-          TYPES=("" "_type=json")
+          TYPES=("" "_type=json" "resultType=json")
+          PAGERS=("cPage=1&rows=1" "pageIndex=1&pageSize=1")
           KEYS=("RAW" "ENC")
 
           PASS=""
           for B in "${BASES[@]}"; do
             for T in "${TYPES[@]}"; do
-              for K in "${KEYS[@]}"; do
-                if [ "$K" = "RAW" ]; then KEYVAL="$RAW"; else KEYVAL="$ENC"; fi
-                echo "::group::TRY B=$B T='$T' K=$K"
-                URL="${B}?serviceKey=${KEYVAL}"
-                [ -n "$T" ] && URL="${URL}&${T}"
-                URL="${URL}&from=${FROM}&to=${TO}&cPage=1&rows=1"
-                echo "[GET] $URL"
-                CODE=$(curl -s -o /tmp/k.json -w "%{http_code}" "$URL")
-                head -c 200 /tmp/k.json; echo; echo "HTTP=$CODE"
-                echo "::endgroup::"
-                if [ "$CODE" = "200" ]; then
-                  PASS="${B}|${K}|${T}"
-                  break 3
-                fi
+              for P in "${PAGERS[@]}"; do
+                for K in "${KEYS[@]}"; do
+                  [ "$K" = "RAW" ] && KEYVAL="$RAW" || KEYVAL="$ENC"
+                  Q="serviceKey=${KEYVAL}&from=${FROM}&to=${TO}&${P}"
+                  [ -n "$T" ] && Q="${Q}&${T}"
+                  URL="${B}?${Q}"
+                  echo "::group::TRY ${URL}"
+                  CODE=$(curl -s -o /tmp/k.json -w "%{http_code}" "$URL")
+                  head -c 200 /tmp/k.json; echo; echo "HTTP=$CODE"
+                  echo "::endgroup::"
+                  if [ "$CODE" = "200" ]; then
+                    PASS="$URL"
+                    break 4
+                  fi
+                done
               done
             done
           done
 
           if [ -z "$PASS" ]; then
-            echo "No 200 combination found. Check that your approval includes '한국문화정보원_한눈에보는문화정보조회서비스(B553457)' and the key is active."
+            echo "No 200 combination found. Verify you have '한국문화정보원_한눈에보는문화정보조회서비스(B553457)' 승인 및 키 활성화."
             exit 1
           fi
+          echo "PASS_URL=$PASS" >> $GITHUB_OUTPUT
 
-          echo "PASS=$PASS" >> $GITHUB_OUTPUT
-
-      # 1) 수집 실행 (RAW 키를 넣어두고, 스크립트 내부에서 필요시 인코딩 처리)
       - name: Harvest | KCISA
         run: node scripts/harvest-kcisa.mjs
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
-          DATA_GO_KR_KCISA: ${{ secrets.DATA_GO_KR_KCISA }}  # 디코딩 키 그대로
+          DATA_GO_KR_KCISA: ${{ secrets.DATA_GO_KR_KCISA }}
 
-      # 2) 최근 8시간 적재 요약(0건이면 실패 표시)
-      - name: Verify | raw_sources kcisa (8h)
+      - name: Verify | raw_sources kcisa (8h, fail if zero)
         shell: bash
         run: |
           SINCE=$(node -e "const d=new Date();d.setHours(d.getHours()-8);console.log(d.toISOString())")
-          RES=$(curl -s "${SUPABASE_URL}/rest/v1/raw_sources?select=dataset,lang,count:count()&source=eq.kcisa&fetched_at=gte.${SINCE}&group=dataset,lang" \
+          RES=$(curl -s "${SUPABASE_URL}/rest/v1/raw_sources?select=count:count()&source=eq.kcisa&fetched_at=gte.${SINCE}" \
             -H "apikey: ${SUPABASE_SERVICE_ROLE}" -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE}")
           echo "$RES" | jq .
-          TOTAL=$(echo "$RES" | jq '[.[].count]|add // 0')
-          echo "TOTAL=$TOTAL"
+          TOTAL=$(echo "$RES" | jq '.[0].count // 0')
           if [ "${TOTAL:-0}" -lt 1 ]; then
             echo "No KCISA rows ingested in last 8h."
             exit 1
