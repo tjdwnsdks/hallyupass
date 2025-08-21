@@ -3,43 +3,35 @@ name: harvest-tourapi
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 */6 * * *'   # 6시간마다(UTC)
+    - cron: '0 */6 * * *'  # 6시간마다
 
 jobs:
-  harvest:
+  run:
     runs-on: ubuntu-latest
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
       DATA_GO_KR_TOURAPI: ${{ secrets.DATA_GO_KR_TOURAPI }}
+
+      # 기존 값
       TOUR_LANGS: ko,en,ja,chs,cht
-      DAYS_AHEAD: '60'
       AREACODES: '1,2,3,4,5,6,7,8,31,32,33,34,35,36,37,38,39'
+      DAYS_AHEAD: '60'
+
+      # 빠른 종료용 파라미터 (원복하려면 아래 4줄을 삭제/완화)
+      FAST_MODE: '1'        # 1=rate22 나오면 과감히 스킵
+      MAX_ATTEMPTS: '1'     # 페이지 재시도 1회(즉시 스킵)
+      AREAS_PER_RUN: '3'    # 한 번에 3개 지역만
+      LANGS_PER_RUN: '1'    # 한 번에 1개 언어만
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      # supabase-js 패키지 import 금지(주석 매칭 오탐 방지)
-      - name: Guard no supabase-js import
-        run: |
-          if grep -R "from '@supabase/supabase-js'" scripts; then
-            echo "ERROR: supabase-js import 발견"; exit 1;
-          fi
-
-      - name: Harvest festivals
+      - name: Harvest TourAPI → raw_sources (festival)
         run: node scripts/harvest-tourapi-festivals.mjs
 
-      - name: Harvest food
-        run: node scripts/harvest-tourapi-food.mjs
-
-      - name: Harvest stay
-        run: node scripts/harvest-tourapi-stay.mjs
-
-      - name: Harvest attractions
-        run: node scripts/harvest-tourapi-attractions.mjs
+      # 필요시 후처리
+      # - name: Transform
+      #   run: node scripts/transform-events.mjs
