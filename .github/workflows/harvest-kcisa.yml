@@ -3,36 +3,32 @@ name: harvest-kcisa
 on:
   workflow_dispatch:
   schedule:
-    # 12시간마다 실행
-    - cron: '0 */12 * * *'
+    - cron: "0 */12 * * *"  # 12시간마다(UTC)
 
 jobs:
-  harvest-kcisa:
+  run:
     runs-on: ubuntu-latest
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
+      DATA_GO_KR_KCISA: ${{ secrets.DATA_GO_KR_KCISA }}
+      DAYS_AHEAD: "60"
+
     steps:
       - uses: actions/checkout@v4
-
-      - name: Use Node.js 20
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: "20"
 
-      - name: Install deps
-        run: npm install
-
-      # ✅ KCISA 키 점검
+      # KCISA 키 점검: 디코딩키를 받아 여기서 강제 퍼센트 인코딩
       - name: Sanity | KCISA key HTTP check
-        env:
-          KEY: ${{ secrets.DATA_GO_KR_KCISA }} # 👉 디코딩키를 넣어야 함
         run: |
           FROM=$(date -u +%Y%m%d); TO=$(date -u -d "+7 days" +%Y%m%d)
-          # Python으로 강제 퍼센트 인코딩
           ENC_KEY=$(python - <<'PY'
 import os, urllib.parse
-print(urllib.parse.quote(os.environ["KEY"], safe=""))
+print(urllib.parse.quote(os.environ["DATA_GO_KR_KCISA"], safe=""))
 PY
 )
-          echo "[GET] from=$FROM to=$TO"
           code=$(curl -s -o /tmp/k.json -w "%{http_code}" -G \
             "https://apis.data.go.kr/B553457/cultureInfo/period2" \
             --data-urlencode "serviceKey=${ENC_KEY}" \
@@ -44,11 +40,6 @@ PY
           head -c 200 /tmp/k.json; echo; echo "HTTP=$code"
           test "$code" = "200"
 
-      # ✅ 실제 KCISA 수확 실행
-      - name: Run harvest KCISA
+      # 수집
+      - name: Harvest | KCISA
         run: node scripts/harvest-kcisa.mjs
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
-          DATA_GO_KR_KCISA: ${{ secrets.DATA_GO_KR_KCISA }} # 디코딩키
-          DAYS_AHEAD: 60
