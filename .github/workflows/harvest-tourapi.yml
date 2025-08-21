@@ -32,10 +32,12 @@ jobs:
           sed -n '1,25p' scripts/harvest-tourapi-food.mjs || true
           sed -n '1,25p' scripts/harvest-tourapi-stay.mjs || true
           sed -n '1,25p' scripts/harvest-tourapi-attractions.mjs || true
-
+ 
       - name: Guard no supabase-js import
         run: |
-          ! grep -R "@supabase/supabase-js" scripts || (echo "ERROR: supabase-js import 발견"; exit 1)
+          if grep -R "@supabase/supabase-js" scripts; then
+            echo "ERROR: supabase-js import 발견"; exit 1;
+          fi
 
       # 수집
       - name: Harvest festivals
