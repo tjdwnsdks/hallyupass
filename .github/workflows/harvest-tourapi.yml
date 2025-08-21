@@ -49,3 +49,13 @@ jobs:
           SINCE=$(node -e "const d=new Date();d.setHours(d.getHours()-8);console.log(d.toISOString())")
           curl -s "$SUPABASE_URL/rest/v1/raw_sources?select=dataset,lang,count:count()&fetched_at=gte.$SINCE&group=dataset,lang&order=dataset.asc,lang.asc" \
             -H "apikey: $SUPABASE_SERVICE_ROLE" -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE" | jq .
+
+      - name: Verify raw_sources counts (8h)
+        env:
+          BASE: ${{ secrets.SUPABASE_URL }}
+          KEY:  ${{ secrets.SUPABASE_SERVICE_ROLE }}
+        run: |
+          SINCE=$(node -e "const d=new Date();d.setHours(d.getHours()-8);console.log(d.toISOString())")
+          echo "SINCE=$SINCE"
+          curl -s "${BASE}/rest/v1/raw_sources?select=dataset,lang,count:count()&fetched_at=gte.${SINCE}&group=dataset,lang&order=dataset.asc,lang.asc" \
+            -H "apikey: ${KEY}" -H "Authorization: Bearer ${KEY}" | jq .
