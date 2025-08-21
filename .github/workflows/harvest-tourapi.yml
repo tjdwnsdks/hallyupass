@@ -3,7 +3,7 @@ name: harvest-tourapi
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 */6 * * *'   # 6시간마다(UTC)
+    - cron: "0 */6 * * *"   # 6시간마다(UTC)
 
 jobs:
   run:
@@ -13,49 +13,67 @@ jobs:
       SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
       DATA_GO_KR_TOURAPI: ${{ secrets.DATA_GO_KR_TOURAPI }}
       TOUR_LANGS: ko,en,ja,chs,cht
-      DAYS_AHEAD: '60'
-      AREACODES: '1,2,3,4,5,6,7,8,31,32,33,34,35,36,37,38,39'
-      TRANSFORM_LOOKBACK_HOURS: '48'
+      DAYS_AHEAD: "60"
+      AREACODES: "1,2,3,4,5,6,7,8,31,32,33,34,35,36,37,38,39"
+      TRANSFORM_LOOKBACK_HOURS: "72"
 
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: '20' }
+        with: { node-version: "20" }
 
-      # 1) 수확
-      - name: harvest festivals
+      # 0) 키/권한 사전 점검
+      - name: Sanity | TourAPI key HTTP check
+        env:
+          KEY: ${{ secrets.DATA_GO_KR_TOURAPI }}
+        run: |
+          FROM=$(date -u +%Y%m%d)
+          TO=$(date -u -d "+30 days" +%Y%m%d)
+          URL="https://apis.data.go.kr/B551011/KorService2/searchFestival2?serviceKey=${KEY}&MobileOS=ETC&MobileApp=HallyuPass&_type=json&eventStartDate=${FROM}&eventEndDate=${TO}&areaCode=1&numOfRows=1&pageNo=1&lang=ko"
+          echo "[GET] $URL"
+          code=$(curl -s -o /tmp/t.json -w "%{http_code}" "$URL")
+          head -c 180 /tmp/t.json; echo; echo "HTTP=$code"
+          test "$code" = "200"
+
+      - name: Sanity | Supabase write test
+        run: |
+          NOW=$(date -u +%F"T"%T"Z")
+          BODY='[{"source":"sanity","dataset":"sanity","external_id":"test-1","lang":"-","payload":{"ping":true},"event_start":null,"event_end":null,"city":null,"fetched_at":"'${NOW}'"}]'
+          echo "insert:"; curl -s -o /tmp/ins.txt -w " HTTP=%{http_code}\n" -X POST "${SUPABASE_URL}/rest/v1/raw_sources" \
+            -H "apikey: ${SUPABASE_SERVICE_ROLE}" -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE}" \
+            -H "Content-Type: application/json" -H "Prefer: resolution=merge-duplicates,return=minimal" \
+            -d "$BODY"; cat /tmp/ins.txt || true
+          echo "cleanup"; curl -s -X DELETE "${SUPABASE_URL}/rest/v1/raw_sources?source=eq.sanity&external_id=eq.test-1" \
+            -H "apikey: ${SUPABASE_SERVICE_ROLE}" -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE}" >/dev/null
+
+      # 1) 수집
+      - name: Harvest | festivals
         run: node scripts/harvest-tourapi-festivals.mjs
-
-      - name: harvest attractions
+      - name: Harvest | attractions
         run: node scripts/harvest-tourapi-attractions.mjs
-
-      - name: harvest food
+      - name: Harvest | food
         run: node scripts/harvest-tourapi-food.mjs
-
-      - name: harvest stay
+      - name: Harvest | stay
         run: node scripts/harvest-tourapi-accommodation.mjs
 
-      # 2) 변환 (festival → events) 기존 스크립트
-      - name: transform festivals → events
+      # 2) 변환
+      - name: Transform | festivals → events
         run: node scripts/transform-events.mjs
-
-      # 3) 변환 (food/stay/attraction → events)
-      - name: transform places → events
+      - name: Transform | food/stay/attraction → events
         run: node scripts/transform-places-to-events.mjs
 
-      # 4) 검증(최근 8h 요약)
-      - name: verify recent (8h)
-        run: |
-          SINCE=$(node -e "const d=new Date();d.setHours(d.getHours()-8);console.log(d.toISOString())")
-          curl -s "$SUPABASE_URL/rest/v1/raw_sources?select=dataset,lang,count:count()&fetched_at=gte.$SINCE&group=dataset,lang&order=dataset.asc,lang.asc" \
-            -H "apikey: $SUPABASE_SERVICE_ROLE" -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE" | jq .
-
-      - name: Verify raw_sources counts (8h)
-        env:
-          BASE: ${{ secrets.SUPABASE_URL }}
-          KEY:  ${{ secrets.SUPABASE_SERVICE_ROLE }}
+      # 3) 적재 결과 요약
+      - name: Verify | raw_sources counts (8h)
         run: |
           SINCE=$(node -e "const d=new Date();d.setHours(d.getHours()-8);console.log(d.toISOString())")
           echo "SINCE=$SINCE"
-          curl -s "${BASE}/rest/v1/raw_sources?select=dataset,lang,count:count()&fetched_at=gte.${SINCE}&group=dataset,lang&order=dataset.asc,lang.asc" \
-            -H "apikey: ${KEY}" -H "Authorization: Bearer ${KEY}" | jq .
+          curl -s "${SUPABASE_URL}/rest/v1/raw_sources?select=dataset,lang,count:count()&fetched_at=gte.${SINCE}&group=dataset,lang&order=dataset.asc,lang.asc" \
+            -H "apikey: ${SUPABASE_SERVICE_ROLE}" -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE}" | jq .
+      - name: Verify | latest 20 raw
+        run: |
+          curl -s "${SUPABASE_URL}/rest/v1/raw_sources?select=id,dataset,source,external_id,lang,fetched_at&order=fetched_at.desc&limit=20" \
+            -H "apikey: ${SUPABASE_SERVICE_ROLE}" -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE}" | jq .
+      - name: Verify | events by type
+        run: |
+          curl -s "${SUPABASE_URL}/rest/v1/events?select=type,count:count()&group=type&order=type.asc" \
+            -H "apikey: ${SUPABASE_SERVICE_ROLE}" -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE}" | jq .
