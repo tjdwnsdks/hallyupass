@@ -3,35 +3,84 @@ name: harvest-tourapi
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 */6 * * *'  # 6시간마다
+    - cron: "0 */6 * * *"   # 6시간마다(UTC)
 
 jobs:
   run:
     runs-on: ubuntu-latest
+
+    # 동시에 두 번 돌지 않도록 보호
+    concurrency:
+      group: harvest-tourapi
+      cancel-in-progress: true
+
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
       DATA_GO_KR_TOURAPI: ${{ secrets.DATA_GO_KR_TOURAPI }}
-
-      # 기존 값
-      TOUR_LANGS: ko,en,ja,chs,cht
-      AREACODES: '1,2,3,4,5,6,7,8,31,32,33,34,35,36,37,38,39'
-      DAYS_AHEAD: '60'
-
-      # 빠른 종료용 파라미터 (원복하려면 아래 4줄을 삭제/완화)
-      FAST_MODE: '1'        # 1=rate22 나오면 과감히 스킵
-      MAX_ATTEMPTS: '1'     # 페이지 재시도 1회(즉시 스킵)
-      AREAS_PER_RUN: '3'    # 한 번에 3개 지역만
-      LANGS_PER_RUN: '1'    # 한 번에 1개 언어만
+      DAYS_AHEAD: "60"   # 수집 기간(오늘~60일)
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 20 }
+      - name: checkout
+        uses: actions/checkout@v4
 
-      - name: Harvest TourAPI → raw_sources (festival)
+      - name: setup-node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # 24시간을 4개 슬롯(0,6,12,18시)로 나눠 지역/언어를 분할 수집
+      - name: compute-slot (UTC)
+        run: |
+          HOUR=$(date -u +%H)
+          SLOT=$((10#$HOUR / 6))
+          echo "SLOT=$SLOT" >> $GITHUB_ENV
+
+          AREAS_A="1,2,3,4,5,6,7,8"
+          AREAS_B="31,32,33,34,35,36,37,38,39"
+
+          case "$SLOT" in
+            0)
+              echo "AREACODES=$AREAS_A" >> $GITHUB_ENV
+              echo "TOUR_LANGS=ko,en"   >> $GITHUB_ENV
+              ;;
+            1)
+              echo "AREACODES=$AREAS_B" >> $GITHUB_ENV
+              echo "TOUR_LANGS=ko,en"   >> $GITHUB_ENV
+              ;;
+            2)
+              echo "AREACODES=$AREAS_A" >> $GITHUB_ENV
+              echo "TOUR_LANGS=ja,chs,cht" >> $GITHUB_ENV
+              ;;
+            3)
+              echo "AREACODES=$AREAS_B" >> $GITHUB_ENV
+              echo "TOUR_LANGS=ja,chs,cht" >> $GITHUB_ENV
+              ;;
+          esac
+
+          echo "slot=$SLOT"
+          echo "AREACODES=$AREACODES"
+          echo "TOUR_LANGS=$TOUR_LANGS"
+
+      # ---- TourAPI 수집 스크립트들 ----
+      - name: harvest festivals
         run: node scripts/harvest-tourapi-festivals.mjs
 
-      # 필요시 후처리
-      # - name: Transform
-      #   run: node scripts/transform-events.mjs
+      - name: harvest food
+        run: node scripts/harvest-tourapi-food.mjs || echo "food script not present or skipped"
+
+      - name: harvest courses (if exists)
+        run: |
+          if [ -f scripts/harvest-tourapi-courses.mjs ]; then
+            node scripts/harvest-tourapi-courses.mjs
+          else
+            echo "courses script not found, skip"
+          fi
+
+      - name: harvest accommodation (if exists)
+        run: |
+          if [ -f scripts/harvest-tourapi-accommodation.mjs ]; then
+            node scripts/harvest-tourapi-accommodation.mjs
+          else
+            echo "accommodation script not found, skip"
+          fi
