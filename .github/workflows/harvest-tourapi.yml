@@ -3,7 +3,7 @@ name: harvest-tourapi
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */6 * * *"  # 6시간마다(UTC)
+    - cron: "0 */6 * * *"
 
 jobs:
   run:
@@ -11,7 +11,7 @@ jobs:
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
-      DATA_GO_KR_TOURAPI: ${{ secrets.DATA_GO_KR_TOURAPI }}
+      DATA_GO_KR_TOURAPI: ${{ secrets.DATA_GO_KR_TOURAPI }} # 인코딩 키
       TOUR_LANGS: ko,en,ja,chs,cht
       DAYS_AHEAD: "60"
       AREACODES: "1,2,3,4,5,6,7,8,31,32,33,34,35,36,37,38,39"
@@ -20,33 +20,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
+        with: { node-version: "20" }
 
-      # 0) TourAPI 키가 실제 200을 주는지 강제 확인
+      # 0) TourAPI 키 200 확인
       - name: Sanity | TourAPI key HTTP check
         run: |
           FROM=$(date -u +%Y%m%d)
           TO=$(date -u -d "+30 days" +%Y%m%d)
           URL="https://apis.data.go.kr/B551011/KorService2/searchFestival2?serviceKey=${DATA_GO_KR_TOURAPI}&MobileOS=ETC&MobileApp=HallyuPass&_type=json&eventStartDate=${FROM}&eventEndDate=${TO}&areaCode=1&numOfRows=1&pageNo=1&lang=ko"
           echo "[GET] $URL"
-          code=$(curl -s -o /tmp/t.json -w "%{http_code}" "$URL")
-          head -c 180 /tmp/t.json; echo; echo "HTTP=$code"
-          test "$code" = "200"
-
-      # 0.5) Supabase raw_sources에 쓰기 가능한지 강제 테스트
-      - name: Sanity | Supabase write test
-        run: |
-          NOW=$(date -u +%F"T"%T"Z")
-          BODY='[{"source":"sanity","dataset":"sanity","external_id":"test-1","lang":"-","payload":{"ping":true},"fetched_at":"'${NOW}'"}]'
-          echo "insert:"
-          curl -s -o /tmp/ins.txt -w " HTTP=%{http_code}\n" -X POST "${SUPABASE_URL}/rest/v1/raw_sources" \
-            -H "apikey: ${SUPABASE_SERVICE_ROLE}" -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE}" \
-            -H "Content-Type: application/json" -H "Prefer: resolution=merge-duplicates,return=minimal" \
-            -d "$BODY"; cat /tmp/ins.txt || true
-          echo "cleanup"
-          curl -s -X DELETE "${SUPABASE_URL}/rest/v1/raw_sources?source=eq.sanity&external_id=eq.test-1" \
-            -H "apikey: ${SUPABASE_SERVICE_ROLE}" -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE}" >/dev/null
+          CODE=$(curl -s -o /tmp/t.json -w "%{http_code}" "$URL")
+          head -c 180 /tmp/t.json; echo; echo "HTTP=$CODE"
+          test "$CODE" = "200"
 
       # 1) 수집
       - name: Harvest | festivals
@@ -64,17 +49,16 @@ jobs:
       - name: Transform | food/stay/attraction → events
         run: node scripts/transform-places-to-events.mjs
 
-      # 3) 적재 결과 확인(8h 요약 / 최신 20 / events 타입별 카운트)
-      - name: Verify | raw_sources counts (8h)
+      # 3) 적재 확인: 8시간 내 총건수 0이면 실패로 처리
+      - name: Verify | raw_sources counts (8h, fail if zero)
+        shell: bash
         run: |
           SINCE=$(node -e "const d=new Date();d.setHours(d.getHours()-8);console.log(d.toISOString())")
-          curl -s "${SUPABASE_URL}/rest/v1/raw_sources?select=dataset,lang,count:count()&fetched_at=gte.${SINCE}&group=dataset,lang&order=dataset.asc,lang.asc" \
-            -H "apikey: ${SUPABASE_SERVICE_ROLE}" -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE}" | jq .
-      - name: Verify | latest 20 raw
-        run: |
-          curl -s "${SUPABASE_URL}/rest/v1/raw_sources?select=id,dataset,source,external_id,lang,fetched_at&order=fetched_at.desc&limit=20" \
-            -H "apikey: ${SUPABASE_SERVICE_ROLE}" -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE}" | jq .
-      - name: Verify | events by type
-        run: |
-          curl -s "${SUPABASE_URL}/rest/v1/events?select=type,count:count()&group=type&order=type.asc" \
-            -H "apikey: ${SUPABASE_SERVICE_ROLE}" -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE}" | jq .
+          RES=$(curl -s "${SUPABASE_URL}/rest/v1/raw_sources?select=count:count()&fetched_at=gte.${SINCE}" \
+            -H "apikey: ${SUPABASE_SERVICE_ROLE}" -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE}")
+          echo "$RES" | jq .
+          TOTAL=$(echo "$RES" | jq '.[0].count // 0')
+          if [ "${TOTAL:-0}" -lt 1 ]; then
+            echo "No TourAPI rows ingested in last 8h."
+            exit 1
+          fi
