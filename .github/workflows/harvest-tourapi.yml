@@ -3,84 +3,49 @@ name: harvest-tourapi
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */6 * * *"   # 6시간마다(UTC)
+    - cron: '0 */6 * * *'   # 6시간마다(UTC)
 
 jobs:
   run:
     runs-on: ubuntu-latest
-
-    # 동시에 두 번 돌지 않도록 보호
-    concurrency:
-      group: harvest-tourapi
-      cancel-in-progress: true
-
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
       DATA_GO_KR_TOURAPI: ${{ secrets.DATA_GO_KR_TOURAPI }}
-      DAYS_AHEAD: "60"   # 수집 기간(오늘~60일)
+      TOUR_LANGS: ko,en,ja,chs,cht
+      DAYS_AHEAD: '60'
+      AREACODES: '1,2,3,4,5,6,7,8,31,32,33,34,35,36,37,38,39'
+      TRANSFORM_LOOKBACK_HOURS: '48'
 
     steps:
-      - name: checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
 
-      - name: setup-node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      # 24시간을 4개 슬롯(0,6,12,18시)로 나눠 지역/언어를 분할 수집
-      - name: compute-slot (UTC)
-        run: |
-          HOUR=$(date -u +%H)
-          SLOT=$((10#$HOUR / 6))
-          echo "SLOT=$SLOT" >> $GITHUB_ENV
-
-          AREAS_A="1,2,3,4,5,6,7,8"
-          AREAS_B="31,32,33,34,35,36,37,38,39"
-
-          case "$SLOT" in
-            0)
-              echo "AREACODES=$AREAS_A" >> $GITHUB_ENV
-              echo "TOUR_LANGS=ko,en"   >> $GITHUB_ENV
-              ;;
-            1)
-              echo "AREACODES=$AREAS_B" >> $GITHUB_ENV
-              echo "TOUR_LANGS=ko,en"   >> $GITHUB_ENV
-              ;;
-            2)
-              echo "AREACODES=$AREAS_A" >> $GITHUB_ENV
-              echo "TOUR_LANGS=ja,chs,cht" >> $GITHUB_ENV
-              ;;
-            3)
-              echo "AREACODES=$AREAS_B" >> $GITHUB_ENV
-              echo "TOUR_LANGS=ja,chs,cht" >> $GITHUB_ENV
-              ;;
-          esac
-
-          echo "slot=$SLOT"
-          echo "AREACODES=$AREACODES"
-          echo "TOUR_LANGS=$TOUR_LANGS"
-
-      # ---- TourAPI 수집 스크립트들 ----
+      # 1) 수확
       - name: harvest festivals
         run: node scripts/harvest-tourapi-festivals.mjs
 
+      - name: harvest attractions
+        run: node scripts/harvest-tourapi-attractions.mjs
+
       - name: harvest food
-        run: node scripts/harvest-tourapi-food.mjs || echo "food script not present or skipped"
+        run: node scripts/harvest-tourapi-food.mjs
 
-      - name: harvest courses (if exists)
-        run: |
-          if [ -f scripts/harvest-tourapi-courses.mjs ]; then
-            node scripts/harvest-tourapi-courses.mjs
-          else
-            echo "courses script not found, skip"
-          fi
+      - name: harvest stay
+        run: node scripts/harvest-tourapi-accommodation.mjs
 
-      - name: harvest accommodation (if exists)
+      # 2) 변환 (festival → events) 기존 스크립트
+      - name: transform festivals → events
+        run: node scripts/transform-events.mjs
+
+      # 3) 변환 (food/stay/attraction → events)
+      - name: transform places → events
+        run: node scripts/transform-places-to-events.mjs
+
+      # 4) 검증(최근 8h 요약)
+      - name: verify recent (8h)
         run: |
-          if [ -f scripts/harvest-tourapi-accommodation.mjs ]; then
-            node scripts/harvest-tourapi-accommodation.mjs
-          else
-            echo "accommodation script not found, skip"
-          fi
+          SINCE=$(node -e "const d=new Date();d.setHours(d.getHours()-8);console.log(d.toISOString())")
+          curl -s "$SUPABASE_URL/rest/v1/raw_sources?select=dataset,lang,count:count()&fetched_at=gte.$SINCE&group=dataset,lang&order=dataset.asc,lang.asc" \
+            -H "apikey: $SUPABASE_SERVICE_ROLE" -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE" | jq .
