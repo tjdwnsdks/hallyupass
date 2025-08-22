@@ -16,7 +16,7 @@ jobs:
       DAYS_AHEAD: "60"
       AREACODES: "1,2,3,4,5,6,7,8,31,32,33,34,35,36,37,38,39"
       TRANSFORM_LOOKBACK_HOURS: "72"
-      TOURAPI_SVC: KorService1   # ★핫픽스: 1로 강제 (2에서 오류시)
+      TOURAPI_SVC: KorService2   # ★핫픽스: 1로 강제 (2에서 오류시)
 
     steps:
       - uses: actions/checkout@v4
