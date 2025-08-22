@@ -1,95 +1,93 @@
-// scripts/harvest-tourapi-festivals.mjs
-import { qs, fetchJson, todayYmd, sleep } from './lib/util.mjs';
-import { createClient } from '@supabase/supabase-js';
+import { qs, fetchJson, todayYmd, addDaysYmd, sleep } from './lib/util.mjs';
+import { upsert } from './lib/sb.mjs';
 
-const KEY   = process.env.DATA_GO_KR_TOURAPI || process.env.DATA_GO_KR_KEY;
-const AREAS = (process.env.AREACODES || '1,2,3,4,5,6,7,8,31,32,33,34,35,36,37,38,39').split(',').map(s=>s.trim());
-const LANGS = (process.env.TOUR_LANGS || 'ko,en').split(',').map(s=>s.trim());
-const PER_PAGE = 100;
+const KEY = process.env.DATA_GO_KR_TOURAPI || process.env.DATA_GO_KR_KEY;
+const SVC = process.env.TOURAPI_SVC || 'KorService1'; // KorService1로 기본
+const BASE = `https://apis.data.go.kr/B551011/${SVC}`;
 const AHEAD = Number(process.env.DAYS_AHEAD || '60');
-const SVC = { ko:'KorService2', en:'EngService2', ja:'JpnService2', chs:'ChsService2', cht:'ChtService2' };
+const AREAS = (process.env.AREACODES || '1').split(',').map(s=>s.trim());
+const LANGS = (process.env.TOUR_LANGS || 'ko').split(',').map(s=>s.trim());
 
-const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE);
-
-// YYYYMMDD + days (UTC)
-function addDaysYmd(ymd, days){
-  const y = Number(ymd.slice(0,4)), m = Number(ymd.slice(4,6)) - 1, d = Number(ymd.slice(6,8));
-  const dt = new Date(Date.UTC(y, m, d));
-  dt.setUTCDate(dt.getUTCDate() + Number(days||0));
-  const yy = dt.getUTCFullYear();
-  const mm = String(dt.getUTCMonth()+1).padStart(2,'0');
-  const dd = String(dt.getUTCDate()).padStart(2,'0');
-  return `${yy}${mm}${dd}`;
+function urlSearchFestival({from,to,area,lang,page=1}) {
+  return `${BASE}/searchFestival2?` + qs({
+    serviceKey: KEY,
+    _type: 'json',
+    MobileOS: 'ETC',
+    MobileApp: 'HallyuPass',
+    eventStartDate: from,
+    eventEndDate: to,
+    areaCode: area,
+    numOfRows: 100,
+    arrange: 'C',
+    pageNo: page,
+    lang
+  });
 }
 
-function baseParams(){
-  return { serviceKey:KEY, _type:'json', MobileOS:'ETC', MobileApp:'HallyuPass', numOfRows:PER_PAGE, arrange:'C', pageNo:1 };
+async function fetchPage(url) {
+  const r = await fetch(url);
+  const head = await r.text();
+  // JSON이 아니면 오류 본문 노출
+  if (!head.trim().startsWith('{')) {
+    console.error('Non-JSON head:', head.slice(0,200));
+    console.error('URL:', url);
+    throw new Error('TourAPI returned non-JSON (likely key-service mismatch or rate limit)');
+  }
+  const j = JSON.parse(head);
+  return j?.response?.body?.items?.item || [];
 }
 
-async function upsertRaw(rows){
-  if(!rows.length) return;
-  const { error } = await sb.from('raw_sources').upsert(rows, { onConflict:'source,dataset,external_id,lang' });
-  if(error) throw new Error(`upsert raw_sources error: ${error.message}`);
-}
+async function run() {
+  const from = todayYmd();
+  const to = addDaysYmd(AHEAD);
+  const out = [];
 
-async function fetchAreaLang(area, lang, fromYmd, toYmd){
-  const svc = SVC[lang] || SVC.ko;
-  const base = `https://apis.data.go.kr/B551011/${svc}/searchFestival2`;
-  console.log(`[FETCH] festivals area=${area} lang=${lang} ${fromYmd}-${toYmd} svc=${svc}`);
-  let page=1, saved=0;
+  for (const lang of LANGS) {
+    for (const area of AREAS) {
+      console.log(`[FETCH] festivals area=${area} lang=${lang} ${from}-${to} svc=${SVC}`);
+      let page = 1, loops = 0;
+      while (true) {
+        const url = urlSearchFestival({from,to,area,lang,page});
+        let items = [];
+        try {
+          items = await fetchPage(url);
+        } catch (e) {
+          // 2~3회 재시도 후 패스
+          if (++loops <= 2) {
+            await sleep(1500);
+            continue;
+          }
+          throw e;
+        }
+        if (!items.length) break;
 
-  while(true){
-    const url = `${base}?` + qs({ ...baseParams(), eventStartDate:fromYmd, eventEndDate:toYmd, areaCode:area, pageNo:page });
-    let j;
-    try{
-      j = await fetchJson(url, { minDelayMs:900, retry:4 });
-    }catch(e){
-      const head = e?.meta?.head || '';
-      console.warn('Non-JSON head:', head);
-      if(/LIMITED_NUMBER_OF_SERVICE_REQUESTS_EXCEEDS_ERROR|22/.test(head)){
-        console.warn('RATE LIMIT → sleep 60s');
-        await sleep(60000);
-        continue;
+        for (const it of items) {
+          const ext = String(it.contentid || `${it.title}|${it.eventstartdate||''}|${it.addr1||''}`);
+          out.push({
+            source: 'tourapi',
+            dataset: 'festival',
+            external_id: ext,
+            lang,
+            payload: it,
+            event_start: (it.eventstartdate||'').slice(0,8)?.replace(/(\d{4})(\d{2})(\d{2})/,'$1-$2-$3') || null,
+            event_end: (it.eventenddate||'').slice(0,8)?.replace(/(\d{4})(\d{2})(\d{2})/,'$1-$2-$3') || null,
+            city: it.areacode ? String(it.areacode) : null
+          });
+        }
+        if (items.length < 100) break;
+        page++;
+        await sleep(300); // 속도 완화
       }
-      throw e;
-    }
-
-    const items = j?.response?.body?.items?.item || [];
-    if(items.length===0) break;
-
-    const rows = items.map(it=>({
-      source:'tourapi',
-      dataset:'festival',
-      external_id:String(it.contentid || it.contentId),
-      lang,
-      payload:it,
-      fetched_at:new Date().toISOString(),
-      event_start: it.eventstartdate ? String(it.eventstartdate).slice(0,8) : null,
-      event_end:   it.eventenddate   ? String(it.eventenddate).slice(0,8)   : null,
-      city: it.sigungucode ? String(it.sigungucode) : null
-    }));
-    await upsertRaw(rows); saved += rows.length;
-
-    const total = j?.response?.body?.totalCount || 0;
-    const maxPages = Math.ceil(total / PER_PAGE) || 1;
-    if(page>=maxPages) break;
-    page++;
-    await sleep(1100);
-  }
-  return saved;
-}
-
-async function run(){
-  const FROM = todayYmd();
-  const TO   = addDaysYmd(FROM, AHEAD);
-  let total=0;
-  for(const lang of LANGS){
-    for(const area of AREAS){
-      const c = await fetchAreaLang(area, lang, FROM, TO);
-      total += (c||0);
-      await sleep(500);
+      await sleep(300);
     }
   }
-  console.log('festivals saved:', total);
+
+  if (out.length) {
+    const res = await upsert('raw_sources', out);
+    console.log('saved festivals:', res.count);
+  } else {
+    console.log('no festivals rows');
+  }
 }
-run().catch(e=>{ console.error(e?.meta||e); process.exit(1); });
+
+run().catch(e => { console.error(e); process.exit(1); });
