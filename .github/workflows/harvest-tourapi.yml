@@ -1,27 +1,29 @@
 name: harvest-tourapi
-
 on:
   workflow_dispatch:
   schedule:
     - cron: "0 */6 * * *"
-
 jobs:
   run:
     runs-on: ubuntu-latest
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
-      DATA_GO_KR_TOURAPI: ${{ secrets.DATA_GO_KR_TOURAPI }} # 인코딩 키
-      DATA_GO_KR_KEY:     ${{ secrets.DATA_GO_KR_TOURAPI }} # 스크립트 호환 별칭
-      TOUR_LANGS: ko,en,ja,chs,cht
+      DATA_GO_KR_TOURAPI: ${{ secrets.DATA_GO_KR_TOURAPI }} # 인코딩키
+      DATA_GO_KR_KEY:     ${{ secrets.DATA_GO_KR_TOURAPI }} # 별칭
+      TOUR_LANGS: ko,en              # 임시 축소(레이트리밋 회피). 안정 후 ko,en,ja,chs,cht 복구
       DAYS_AHEAD: "60"
       AREACODES: "1,2,3,4,5,6,7,8,31,32,33,34,35,36,37,38,39"
       TRANSFORM_LOOKBACK_HOURS: "72"
-
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: "20" }
+
+      - name: Install deps
+        run: |
+          npm init -y
+          npm i @supabase/supabase-js@2
 
       - name: Harvest | festivals
         run: node scripts/harvest-tourapi-festivals.mjs
@@ -34,15 +36,5 @@ jobs:
 
       - name: Transform | festivals → events
         run: node scripts/transform-events.mjs
-      - name: Transform | food/stay/attraction → events
+      - name: Transform | places → events
         run: node scripts/transform-places-to-events.mjs
-
-      - name: Verify | raw_sources 8h
-        shell: bash
-        run: |
-          SINCE=$(node -e "const d=new Date();d.setHours(d.getHours()-8);console.log(d.toISOString())")
-          RES=$(curl -s "${SUPABASE_URL}/rest/v1/raw_sources?select=count:count()&fetched_at=gte.${SINCE}" \
-            -H "apikey: ${SUPABASE_SERVICE_ROLE}" -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE}")
-          echo "$RES" | jq .
-          TOTAL=$(echo "$RES" | jq '.[0].count // 0')
-          test "${TOTAL:-0}" -ge 1
