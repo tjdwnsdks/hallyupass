@@ -2,7 +2,7 @@ import { qs, fetchJson, sleep } from './lib/util.mjs';
 import { upsert } from './lib/sb.mjs';
 
 const KEY = process.env.DATA_GO_KR_TOURAPI || process.env.DATA_GO_KR_KEY;
-const SVC = process.env.TOURAPI_SVC || 'KorService1';
+const SVC = process.env.TOURAPI_SVC || 'KorService2';
 const BASE = `https://apis.data.go.kr/B551011/${SVC}`;
 const AREAS = (process.env.AREACODES || '1').split(',').map(s=>s.trim());
 const LANGS = (process.env.TOUR_LANGS || 'ko').split(',').map(s=>s.trim());
