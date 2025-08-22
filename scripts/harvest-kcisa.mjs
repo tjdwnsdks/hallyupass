@@ -1,127 +1,103 @@
-// KCISA 공연·전시·행사 → raw_sources(dataset:'performance')
-// - supabase-js 미사용
-// - Encoding 키를 그대로 serviceKey에 사용
-import { qs } from './lib/util.mjs';
-import { upsertRaw } from './lib/db.mjs';
+// scripts/harvest-kcisa.mjs
+import { createClient } from '@supabase/supabase-js';
+import { qs, fetchJson, encodeKeyOnce, todayYmd, plusDaysYmd, sleep } from './lib/util.mjs';
+
+const RAW = process.env.DATA_GO_KR_KCISA || process.env.DATA_GO_KR_KEY || "";
+const KEY = encodeKeyOnce(RAW); // 디코딩키여도 1회 인코딩
+const FROM = todayYmd();
+const TO   = plusDaysYmd(Number(process.env.DAYS_AHEAD || '60'));
 
 const BASES = [
-  'https://apis.data.go.kr/B553457/cultureinfo/period2', // 소문자 권장
-  'https://apis.data.go.kr/B553457/cultureInfo/period2', // 대문자 폴백
+  'https://apis.data.go.kr/B553457/cultureInfo/period2',
+  'https://apis.data.go.kr/B553457/cultureInfo/period'
+];
+// KCISA는 API별로 _type=resultType 혼재
+const TYPE_PARAMS = [
+  {}, { _type:'json' }, { resultType:'json' }
+];
+// 페이징 파라미터 혼재
+const Pagers = [
+  { cPage:1, rows:100 },
+  { pageIndex:1, pageSize:100 }
 ];
 
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE);
 
-function ymdUTC(d=new Date()){const y=d.getUTCFullYear(),m=String(d.getUTCMonth()+1).padStart(2,'0'),da=String(d.getUTCDate()).padStart(2,'0');return `${y}${m}${da}`;}
-function plusDaysYmd(n,base=new Date()){const d=new Date(base);d.setUTCDate(d.getUTCDate()+Number(n||0));return ymdUTC(d);}
-
-function buildUrl(base,key,params){const rest=qs(params);return `${base}?serviceKey=${key}${rest?`&${rest}`:''}`;}
-function looksJson(txt){const t=txt.trim();return t.startsWith('{')||t.startsWith('[');}
-function pickItems(j){
-  const body = j?.response?.body;
-  let items = body?.items ?? body?.item ?? j?.items ?? [];
-  if (!Array.isArray(items)) items = items ? [items] : [];
-  return items;
-}
-function xmlReason(txt){
-  const msg = (txt.match(/<returnAuthMsg>([^<]+)<\/returnAuthMsg>/i)||[])[1]||'';
-  const code= (txt.match(/<returnReasonCode>(\d+)<\/returnReasonCode>/i)||[])[1]||'';
-  return {msg, code};
+function shapeItems(j){
+  // 가능한 구조 모두 대비
+  const a = j?.response?.body?.items ?? j?.response?.body?.item ?? j?.items ?? [];
+  if(Array.isArray(a)) return a;
+  if(a && typeof a==='object') return Object.values(a);
+  return [];
 }
 
-async function fetchOne(url){
-  try{
-    const r = await fetch(url,{headers:{Accept:'application/json'}});
-    const txt = await r.text();
-    if (looksJson(txt)) {
-      try { return { json: JSON.parse(txt) }; }
-      catch { /* fallthrough to xml */ }
-    }
-    // JSON 아님 → XML/에러로 처리
-    return { xml: txt };
-  }catch(e){
-    return { err: e };
-  }
-}
-
-async function tryFetchPage(key, from, to, page){
-  // 파라미터·베이스 대체 시도 (문서/게이트웨이 편차 대응)
-  const variants = [
-    { _type:'json', from, to, cPage:page, rows:50 },
-    { type:'json',  from, to, cPage:page, rows:50 },
-    { _type:'json', from, to, cPage:page, numOfRows:50 },
-  ];
-
-  for (const base of BASES){
-    for (const p of variants){
-      const url = buildUrl(base, key, p);
-      console.log('[GET kcisa]', url);
-      const res = await fetchOne(url);
-      if (res.json){
-        const items = pickItems(res.json);
-        return { items };
-      }
-      if (res.xml){
-        // SOAP Fault 등
-        console.error('KCISA non-JSON head:', res.xml.slice(0,200));
-        const { msg, code } = xmlReason(res.xml);
-        if (code === '22') {           // 과다요청
-          await sleep(1500);
-          continue;
-        }
-        if (code === '30') {           // SERVICE_KEY_IS_NOT_REGISTERED_ERROR
-          // 키/엔드포인트 문제 → 다음 조합 시도만 하고 계속
-          continue;
-        }
-        // 기타 에러도 다음 조합 시도
-        continue;
-      }
-      if (res.err){
-        console.error('KCISA request error:', res.err.message);
-        await sleep(600);
-      }
-    }
-  }
-  return { items: null }; // 모든 조합 실패
+async function tryOnce(base, typeParam, pager){
+  const url = `${base}?` + qs({ serviceKey: KEY, from: FROM, to: TO, ...typeParam, ...pager });
+  const json = await fetchJson(url, {retry: 4, minDelayMs: 900});
+  const items = shapeItems(json);
+  return { url, items };
 }
 
 async function run(){
-  const key   = process.env.DATA_GO_KR_KCISA; // Encoding Key
-  const ahead = parseInt(process.env.DAYS_AHEAD || '60', 10);
-  const from  = ymdUTC();
-  const to    = plusDaysYmd(ahead);
-
-  let saved = 0;
-  for (let page=1; page<=20; page++){
-    const { items } = await tryFetchPage(key, from, to, page);
-    if (items === null){
-      console.warn('[KCISA] JSON 응답 확보 실패. 실행 스킵.');
-      break;
+  let saved = 0, tried = 0, ok = false;
+  for(const b of BASES){
+    for(const t of TYPE_PARAMS){
+      for(const p of Pagers){
+        tried++;
+        try{
+          const { url, items } = await tryOnce(b, t, p);
+          if(items.length===0){ continue; }
+          ok = true;
+          console.log(`KCISA OK: ${url} items=${items.length}`);
+          // 최대 1000건까지만 페이징 확장 시도
+          let page=2;
+          while(items.length < 1000){
+            const nextPager = { ...p };
+            if('cPage' in nextPager) nextPager.cPage = page;
+            if('pageIndex' in nextPager) nextPager.pageIndex = page;
+            try{
+              const { items:more } = await tryOnce(b, t, nextPager);
+              if(!more.length) break;
+              items.push(...more);
+              page++;
+              await sleep(1000);
+            }catch(e){
+              break;
+            }
+          }
+          // 업서트
+          const rows = items.map(it=>{
+            const ext = String(it.cul_id || it.id || it.CUL_ID || it.TITLE || `${it.title}|${it.startDate}|${it.place}`);
+            return {
+              source: 'kcisa',
+              dataset: 'performance',
+              external_id: ext,
+              lang: 'ko',
+              payload: it,
+              event_start: (it.startDate || it.START_DATE || "").slice(0,10) || null,
+              event_end:   (it.endDate   || it.END_DATE   || "").slice(0,10) || null,
+              city: it.place || it.PLACE || null,
+              fetched_at: new Date().toISOString()
+            };
+          });
+          if(rows.length){
+            const { error } = await sb.from('raw_sources').upsert(rows, { onConflict: 'source,dataset,external_id,lang' });
+            if(error) throw new Error(`upsert raw_sources error: ${error.message}`);
+            saved += rows.length;
+          }
+          // 한 조합 성공하면 종료
+          b!==BASES[0] && console.warn('KCISA: fallback endpoint used');
+          console.log('kcisa saved:', saved);
+          return;
+        }catch(e){
+          const head = e?.meta?.head || '';
+          console.warn('KCISA try fail', {base:b, t, p, status:e?.meta?.status, head: head.slice(0,120)});
+          await sleep(500);
+        }
+      }
     }
-    if (items.length === 0){
-      console.log('[KCISA] 더 이상 항목 없음');
-      break;
-    }
-
-    for (const it of items){
-      const ext = String(it.cul_id || it.id || `${it.title||''}|${it.startDate||''}|${it.place||''}`);
-      try{
-        await upsertRaw({
-          source:'kcisa',
-          dataset:'performance',
-          external_id: ext,
-          lang:'ko',
-          payload: it,
-          event_start: it.startDate?.slice(0,10) || null,
-          event_end:   it.endDate?.slice(0,10)   || null,
-          city: it.place || null
-        });
-        saved++;
-      }catch(e){ console.error('upsert error:', e.message); }
-    }
-
-    if (items.length < 50) break;
-    await sleep(500);
   }
-  console.log(`[KCISA] saved=${saved}`);
+  if(!ok) throw new Error(`KCISA all combinations failed after ${tried} tries`);
 }
-run(); // 절대 throw하지 않음
+
+run().catch(e=>{ console.error(e?.meta||e); process.exit(1); });
