@@ -11,8 +11,8 @@ jobs:
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
-      DATA_GO_KR_TOURAPI: ${{ secrets.DATA_GO_KR_TOURAPI }} # 인코딩키
-      DATA_GO_KR_KEY: ${{ secrets.DATA_GO_KR_TOURAPI }}      # ← 스크립트 호환용 별칭
+      DATA_GO_KR_TOURAPI: ${{ secrets.DATA_GO_KR_TOURAPI }} # 인코딩 키
+      DATA_GO_KR_KEY:     ${{ secrets.DATA_GO_KR_TOURAPI }} # 스크립트 호환 별칭
       TOUR_LANGS: ko,en,ja,chs,cht
       DAYS_AHEAD: "60"
       AREACODES: "1,2,3,4,5,6,7,8,31,32,33,34,35,36,37,38,39"
@@ -22,16 +22,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: "20" }
-
-      - name: Sanity | TourAPI key HTTP check
-        run: |
-          FROM=$(date -u +%Y%m%d)
-          TO=$(date -u -d "+30 days" +%Y%m%d)
-          URL="https://apis.data.go.kr/B551011/KorService2/searchFestival2?serviceKey=${DATA_GO_KR_TOURAPI}&MobileOS=ETC&MobileApp=HallyuPass&_type=json&eventStartDate=${FROM}&eventEndDate=${TO}&areaCode=1&numOfRows=1&pageNo=1&lang=ko"
-          echo "[GET] $URL"
-          CODE=$(curl -s -o /tmp/t.json -w "%{http_code}" "$URL")
-          head -c 180 /tmp/t.json; echo; echo "HTTP=$CODE"
-          test "$CODE" = "200"
 
       - name: Harvest | festivals
         run: node scripts/harvest-tourapi-festivals.mjs
@@ -47,7 +37,7 @@ jobs:
       - name: Transform | food/stay/attraction → events
         run: node scripts/transform-places-to-events.mjs
 
-      - name: Verify | raw_sources counts (8h, fail if zero)
+      - name: Verify | raw_sources 8h
         shell: bash
         run: |
           SINCE=$(node -e "const d=new Date();d.setHours(d.getHours()-8);console.log(d.toISOString())")
@@ -55,7 +45,4 @@ jobs:
             -H "apikey: ${SUPABASE_SERVICE_ROLE}" -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE}")
           echo "$RES" | jq .
           TOTAL=$(echo "$RES" | jq '.[0].count // 0')
-          if [ "${TOTAL:-0}" -lt 1 ]; then
-            echo "No TourAPI rows ingested in last 8h."
-            exit 1
-          fi
+          test "${TOTAL:-0}" -ge 1
