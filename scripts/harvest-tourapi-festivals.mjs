@@ -2,7 +2,7 @@ import { qs, fetchJson, todayYmd, addDaysYmd, sleep } from './lib/util.mjs';
 import { upsert } from './lib/sb.mjs';
 
 const KEY = process.env.DATA_GO_KR_TOURAPI || process.env.DATA_GO_KR_KEY;
-const SVC = process.env.TOURAPI_SVC || 'KorService1'; // KorService1로 기본
+const SVC = process.env.TOURAPI_SVC || 'KorService2'; // KorService1로 기본
 const BASE = `https://apis.data.go.kr/B551011/${SVC}`;
 const AHEAD = Number(process.env.DAYS_AHEAD || '60');
 const AREAS = (process.env.AREACODES || '1').split(',').map(s=>s.trim());
