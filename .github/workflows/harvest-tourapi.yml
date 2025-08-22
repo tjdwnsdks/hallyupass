@@ -37,6 +37,11 @@ jobs:
           else
             echo "✅ No plusDaysYmd import"
           fi
+          
+      - name: echo-file-heads
+        run: |
+          echo "== head festivals.mjs =="; sed -n '1,20p' scripts/harvest-tourapi-festivals.mjs
+          echo "== head util.mjs =="; sed -n '1,60p' scripts/lib/util.mjs
 
       - name: Harvest | festivals
         run: node scripts/harvest-tourapi-festivals.mjs
