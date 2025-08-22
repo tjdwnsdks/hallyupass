@@ -1,4 +1,4 @@
-// scripts/harvest-tourapi-food.mjs
+// scripts/harvest-tourapi-accommodation.mjs
 import { qs, fetchJsonSmart, sleep, normalizeKey } from './lib/util.mjs';
 import { upsert } from './lib/sb.mjs';
 
@@ -9,7 +9,7 @@ const AREAS = (process.env.AREACODES || '1,2,3,4,5,6,7,8,31,32,33,34,35,36,37,38
 const LANGS = (process.env.TOUR_LANGS || 'ko,en').split(',').map(s => s.trim());
 
 async function fetchPage(params, attempt = 1) {
-  const url = `${BASE}?` + qs({ serviceKey: KEY, _type:'json', MobileOS:'ETC', MobileApp:'HallyuPass', contentTypeId:39, numOfRows:100, arrange:'C', ...params });
+  const url = `${BASE}?` + qs({ serviceKey: KEY, _type:'json', MobileOS:'ETC', MobileApp:'HallyuPass', contentTypeId:32, numOfRows:100, arrange:'C', ...params });
   try {
     const j = await fetchJsonSmart(url, { label:'tourapi' });
     const items = j?.response?.body?.items?.item || [];
@@ -29,13 +29,13 @@ async function run() {
   const out = [];
   for (const lang of LANGS) {
     for (const areaCode of AREAS) {
-      console.log(`[FETCH] food area=${areaCode} lang=${lang}`);
+      console.log(`[FETCH] stay area=${areaCode} lang=${lang}`);
       for (let pageNo = 1; pageNo <= 30; pageNo++) {
         const items = await fetchPage({ areaCode, pageNo, lang });
         if (!items.length) break;
         for (const it of items) {
           const ext = String(it.contentid ?? `${it.title ?? ''}|${areaCode}`);
-          out.push({ source:'tourapi', dataset:'food', external_id:ext, lang, payload:it, city:it.addr1 ?? null });
+          out.push({ source:'tourapi', dataset:'stay', external_id:ext, lang, payload:it, city:it.addr1 ?? null });
         }
         if (items.length < 100) break;
         await sleep(1000);
@@ -45,9 +45,9 @@ async function run() {
   }
   if (out.length) {
     const r = await upsert('raw_sources', out);
-    console.log('tourapi food saved:', r.count);
+    console.log('tourapi stay saved:', r.count);
   } else {
-    console.log('tourapi food: no items');
+    console.log('tourapi stay: no items');
   }
 }
 run().catch(e => { console.error(e); process.exit(1); });
