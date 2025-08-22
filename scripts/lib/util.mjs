@@ -1,26 +1,34 @@
-// scripts/lib/util.mjs
+// scripts/lib/util.mjs  ← 필요한 경우 보강
 export function todayYmd(d=new Date()){
-  const y=d.getUTCFullYear(), m=String(d.getUTCMonth()+1).padStart(2,'0'), day=String(d.getUTCDate()).padStart(2,'0');
-  return `${y}${m}${day}`;
+  const z = n=>String(n).padStart(2,'0');
+  return `${d.getUTCFullYear()}${z(d.getUTCMonth()+1)}${z(d.getUTCDate())}`;
 }
-export function addDaysYmd(days, base=new Date()){
-  const d=new Date(base);
+export function addDaysYmd(days){
+  const d = new Date();
   d.setUTCDate(d.getUTCDate()+Number(days||0));
   return todayYmd(d);
 }
-export const plusDaysYmd = addDaysYmd;
-export const sleep = (ms)=> new Promise(r=>setTimeout(r,ms));
+export function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
+
 export function qs(obj){
-  return Object.entries(obj)
-    .filter(([,v])=>v!==undefined && v!==null && v!=='')
-    .map(([k,v])=>`${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
-    .join('&');
-}
-export async function fetchJson(url){
-  const r = await fetch(url);
-  const text = await r.text();
-  if (!text.trim().startsWith('{')) {
-    return { ok:false, status:r.status, head:text, url };
+  const p = new URLSearchParams();
+  for(const [k,v] of Object.entries(obj)){
+    if(v===undefined || v===null) continue;
+    p.append(k, String(v));
   }
-  return { ok:true, json: JSON.parse(text) };
+  return p.toString();
+}
+
+export async function fetchJson(url, {expectJson=true, label=''} = {}){
+  const r = await fetch(url);
+  const txt = await r.text();
+  if(expectJson){
+    try { return JSON.parse(txt); }
+    catch(e){
+      console.error(`Non-JSON head: ${txt.slice(0,180)}`);
+      console.error('URL:', url);
+      throw new Error((label||'')+' non-JSON');
+    }
+  }
+  return txt;
 }
