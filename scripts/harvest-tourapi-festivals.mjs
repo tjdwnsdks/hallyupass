@@ -1,4 +1,4 @@
-// scripts/harvest-tourapi-festivals.mjs
+// scripts/harvest-tourapi-festivals.mjs  ← 전체 교체
 import { qs, fetchJson, todayYmd, sleep } from './lib/util.mjs';
 import { createClient } from '@supabase/supabase-js';
 
@@ -11,7 +11,7 @@ const SVC = { ko:'KorService2', en:'EngService2', ja:'JpnService2', chs:'ChsServ
 
 const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE);
 
-// YYYYMMDD + n일(UTC)
+// YYYYMMDD 문자열에 days 더하기(UTC)
 function addDaysYmd(baseYmd, days){
   const y = Number(baseYmd.slice(0,4));
   const m = Number(baseYmd.slice(4,6)) - 1;
@@ -46,19 +46,25 @@ async function fetchAreaLang(area, lang, fromYmd, toYmd){
     try{
       j = await fetchJson(url, { minDelayMs:900, retry:4 });
     }catch(e){
-      const head=e?.meta?.head||'';
+      const head = e?.meta?.head || '';
       if(/LIMITED_NUMBER_OF_SERVICE_REQUESTS_EXCEEDS_ERROR|22/.test(head)){
-        console.warn('RATE LIMIT. sleep 60s'); await sleep(60000); continue;
+        console.warn('RATE LIMIT. sleep 60s');
+        await sleep(60000);
+        continue;
       }
       throw e;
     }
+
     const items = j?.response?.body?.items?.item || [];
     if(items.length===0) break;
 
     const rows = items.map(it=>({
-      source:'tourapi', dataset:'festival',
+      source:'tourapi',
+      dataset:'festival',
       external_id:String(it.contentid || it.contentId),
-      lang, payload:it, fetched_at:new Date().toISOString(),
+      lang,
+      payload:it,
+      fetched_at:new Date().toISOString(),
       event_start: it.eventstartdate ? String(it.eventstartdate).slice(0,8) : null,
       event_end:   it.eventenddate   ? String(it.eventenddate).slice(0,8)   : null,
       city: it.sigungucode ? String(it.sigungucode) : null
@@ -68,7 +74,8 @@ async function fetchAreaLang(area, lang, fromYmd, toYmd){
     const total = j?.response?.body?.totalCount || 0;
     const maxPages = Math.ceil(total / PER_PAGE) || 1;
     if(page>=maxPages) break;
-    page++; await sleep(1100);
+    page++;
+    await sleep(1100);
   }
   return saved;
 }
