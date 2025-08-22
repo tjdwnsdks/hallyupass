@@ -1,99 +1,109 @@
-// scripts/harvest-kcisa.mjs
-import * as UTIL from './lib/util.mjs';
-import { upsert } from './lib/sb.mjs';
+import { createClient } from '@supabase/supabase-js';
+import { qs, fetchJson, normalizeKey, todayYmd, addDaysYmd, sleep } from './lib/util.mjs';
 
-// util 호환
-const qs = UTIL.qs;
-const fetchJson = UTIL.fetchJson;
-const sleep = UTIL.sleep ?? (ms=>new Promise(r=>setTimeout(r,ms)));
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE;
+const DAYS_AHEAD = Number(process.env.DAYS_AHEAD || '60');
 
-function ymdDash(offsetDays){
-  const d = new Date();
-  d.setUTCDate(d.getUTCDate() + offsetDays);
-  const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth()+1).padStart(2,'0');
-  const day = String(d.getUTCDate()).padStart(2,'0');
-  return `${y}-${m}-${day}`; // KCISA는 하이픈 포함 YYYY-MM-DD 필요
-}
+const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE);
 
-const KEY_RAW = process.env.DATA_GO_KR_KCISA || '';
-function normalizeKey(k){
-  try { return encodeURIComponent(decodeURIComponent(k)); }
-  catch { return encodeURIComponent(k); }
-}
-const KEY   = normalizeKey(KEY_RAW);
-const AHEAD = Number(process.env.DAYS_AHEAD || '60');
-
-// 반드시 소문자 base 우선
-const BASES = [
-  'https://apis.data.go.kr/B553457/cultureinfo/period2',
-  'https://apis.data.go.kr/B553457/cultureinfo/period',
-  // KCISA 게이트웨이 폴백
-  'https://api.kcisa.kr/openapi/service/rest/cultureinfo/period2',
-  'https://api.kcisa.kr/openapi/service/rest/cultureinfo/period',
-];
-
-// 문서/게이트웨이별 페이징 파라미터 차이 대응
-const PARAM_VARIANTS = [
-  (from,to,p)=>({ serviceKey: KEY, _type:'json', from, to, pageNo: p, numOfRows: 50 }),
-  (from,to,p)=>({ serviceKey: KEY, _type:'json', from, to, cPage:  p, rows:      50 }),
-];
-
-async function tryOnce(base, params){
-  const url = `${base}?` + qs(params);
-  console.log('[KCISA GET]', url);
-  const j = await fetchJson(url, { label:'kcisa' });
-  const body = j?.response?.body ?? j?.body ?? j;
-  const node = body?.items?.item ?? body?.items ?? body?.item ?? [];
-  const items = Array.isArray(node) ? node : (node ? [node] : []);
+function pickItems(json) {
+  // KCISA 응답 포맷 가변 대응
+  // 보편적으로 response.body.items.item 혹은 response.body.items
+  const body = json?.response?.body;
+  if (!body) return [];
+  let items = body?.items?.item ?? body?.items ?? [];
+  if (!Array.isArray(items)) items = [items].filter(Boolean);
   return items;
 }
 
-async function fetchPage(base, from, to, page){
-  for (const build of PARAM_VARIANTS){
-    try {
-      return await tryOnce(base, build(from,to,page));
-    } catch (e){
-      const msg = e?.message || '';
-      // SOAP Fault/라우팅/정책 실패 등은 다음 variant로 폴백
-      console.warn('[KCISA variant failed]', msg || e);
-    }
+async function fetchKCISA(base, params) {
+  const url = base + qs(params);
+  try {
+    const json = await fetchJson(url);
+    return { ok: true, url, json };
+  } catch (e) {
+    return { ok: false, url, err: e };
   }
-  throw new Error('KCISA: all param variants failed');
 }
 
-async function run(){
-  const from = ymdDash(0);          // ← 하이픈 포함
-  const to   = ymdDash(AHEAD);      // ← 하이픈 포함
-  const out  = [];
+async function run() {
+  const rawKey = normalizeKey(process.env.DATA_GO_KR_KCISA || '');
+  if (!rawKey) throw new Error('KCISA: empty DATA_GO_KR_KCISA');
 
-  for (const base of BASES){
-    try {
-      for (let p=1; p<=30; p++){
-        const items = await fetchPage(base, from, to, p);
-        if (!items.length) break;
-        for (const it of items){
-          const ext = String(it.cul_id ?? it.id ?? `${it.title ?? ''}|${it.startDate ?? ''}|${it.place ?? ''}`);
-          out.push({
-            source:'kcisa', dataset:'performance', external_id: ext, lang:'ko',
-            payload: it,
-            event_start: (it.startDate ?? '').slice(0,10) || null,
-            event_end:   (it.endDate   ?? '').slice(0,10)   || null,
-            city: it.place ?? null,
-          });
+  const from = todayYmd();               // YYYYMMDD
+  const to   = addDaysYmd(from, DAYS_AHEAD);
+
+  const bases = [
+    // data.go.kr 게이트웨이
+    'https://apis.data.go.kr/B553457/cultureinfo/period2',
+    'https://apis.data.go.kr/B553457/cultureinfo/period',
+    // KCISA 직접 엔드포인트(일부 계정에 필요)
+    'https://api.kcisa.kr/openapi/service/rest/cultureinfo/period2',
+    'https://api.kcisa.kr/openapi/service/rest/cultureinfo/period',
+  ];
+
+  const variants = [
+    (b) => [b, { serviceKey: rawKey, _type: 'json', from, to, pageNo: 1, numOfRows: 50 }],
+    (b) => [b, { serviceKey: rawKey, _type: 'json', from, to, cPage: 1, rows: 50 }],
+  ];
+
+  let collected = 0;
+  let lastErrs = [];
+
+  for (const base of bases) {
+    for (const make of variants) {
+      const [b, params] = make(base);
+      console.log('[KCISA GET]', b + qs(params));
+      const r = await fetchKCISA(b, params);
+      if (!r.ok) {
+        const head = r.err?.head || '';
+        // 대표 에러 라벨링
+        if (head.includes('SERVICE_KEY_IS_NOT_REGISTERED_ERROR')) {
+          console.log('[KCISA variant failed] kcisa OpenAPI error(30): SERVICE_KEY_IS_NOT_REGISTERED_ERROR');
+        } else if (head.includes('Policy Falsified')) {
+          console.log('[KCISA variant failed] kcisa SOAP: Policy Falsified');
+        } else if (head) {
+          console.log('[KCISA variant failed] kcisa non-JSON');
+        } else {
+          console.log('[KCISA variant failed] http error');
         }
-        if (items.length < 50) break;
-        await sleep(300);
+        lastErrs.push({ base: b, head: r.err?.head || '', url: r.err?.url || '' });
+        await sleep(800); // 살짝 텀
+        continue;
       }
-      if (out.length) break; // 한 BASE 성공 시 종료
-    } catch (e){
-      console.warn('[KCISA base failed]', base, e?.message || e);
+
+      const items = pickItems(r.json);
+      if (items.length === 0) {
+        console.log('[KCISA] no items on this variant');
+        continue;
+      }
+
+      // raw_sources 적재
+      const rows = items.map(it => ({
+        source: 'kcisa',
+        dataset: 'cultureinfo',
+        external_id: String(it?.seq ?? it?.id ?? ''), // 항목 키 후보
+        lang: null,
+        payload: it,
+        fetched_at: new Date().toISOString(),
+      }));
+
+      const { error } = await sb.from('raw_sources').insert(rows);
+      if (error) throw error;
+
+      collected += rows.length;
+      console.log(`[KCISA] inserted ${rows.length} rows`);
+      // 한 변형에서 성공하면 더 안 바꿔도 됨
+      break;
     }
+    if (collected > 0) break;
   }
 
-  if (!out.length) throw new Error('KCISA: no items (키/승인/엔드포인트/기간 확인)');
-  const r = await upsert('raw_sources', out);
-  console.log('kcisa saved:', r.count);
+  if (collected === 0) {
+    console.log('[KCISA base failed]', 'KCISA: all param variants failed');
+    throw new Error('KCISA: no items (키/승인/엔드포인트/기간 확인)');
+  }
 }
 
-run().catch(e=>{ console.error(e); process.exit(1); });
+run().catch(e => { throw e; });
