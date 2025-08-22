@@ -1,80 +1,58 @@
-import { qs, fetchJson, sleep } from './lib/util.mjs';
+// scripts/harvest-tourapi-attractions.mjs
+import { qs, fetchJson, sleep, normalizeKey } from './lib/util.mjs';
 import { upsert } from './lib/sb.mjs';
 
-const KEY = process.env.DATA_GO_KR_TOURAPI || process.env.DATA_GO_KR_KEY;
-const SVC = process.env.TOURAPI_SVC || 'KorService2';
-const BASE = `https://apis.data.go.kr/B551011/${SVC}`;
-const AREAS = (process.env.AREACODES || '1').split(',').map(s=>s.trim());
-const LANGS = (process.env.TOUR_LANGS || 'ko').split(',').map(s=>s.trim());
+const RAW_KEY = process.env.DATA_GO_KR_TOURAPI || '';
+const KEY = normalizeKey(RAW_KEY);
+const BASE = 'https://apis.data.go.kr/B551011/KorService2/areaBasedList2';
 
-function urlAreaList({area,lang,page=1}) {
-  return `${BASE}/areaBasedList2?` + qs({
+const AREAS = (process.env.AREACODES || '1,2,3,4,5,6,7,8,31,32,33,34,35,36,37,38,39').split(',').map(s => s.trim());
+const LANGS = (process.env.TOUR_LANGS || 'ko,en').split(',').map(s => s.trim());
+
+async function fetchPage(params) {
+  const url = `${BASE}?` + qs({
     serviceKey: KEY,
     _type: 'json',
     MobileOS: 'ETC',
     MobileApp: 'HallyuPass',
-    contentTypeId: 12,   // 관광지
-    areaCode: area,
-    numOfRows: 100,
-    arrange: 'C',
-    pageNo: page,
-    lang
+    contentTypeId: 12, // 관광지
+    ...params
   });
-}
-
-async function fetchPage(url) {
-  const r = await fetch(url);
-  const head = await r.text();
-  if (!head.trim().startsWith('{')) {
-    console.error('Non-JSON head:', head.slice(0,200));
-    console.error('URL:', url);
-    throw new Error('TourAPI returned non-JSON (likely key-service mismatch or rate limit)');
-  }
-  const j = JSON.parse(head);
-  return j?.response?.body?.items?.item || [];
+  const j = await fetchJson(url, { label: 'tourapi' });
+  const items = j?.response?.body?.items?.item || [];
+  return Array.isArray(items) ? items : (items ? [items] : []);
 }
 
 async function run() {
   const out = [];
   for (const lang of LANGS) {
-    for (const area of AREAS) {
-      console.log(`[FETCH] attraction area=${area} lang=${lang}`);
-      let page = 1, loops = 0;
-      while (true) {
-        const url = urlAreaList({area,lang,page});
-        let items = [];
-        try {
-          items = await fetchPage(url);
-        } catch (e) {
-          if (++loops <= 2) { await sleep(1500); continue; }
-          throw e;
-        }
+    for (const areaCode of AREAS) {
+      console.log(`[FETCH] attraction area=${areaCode} lang=${lang}`);
+      for (let pageNo = 1; pageNo <= 30; pageNo++) {
+        const items = await fetchPage({ areaCode, pageNo, numOfRows: 100, arrange: 'C', lang });
         if (!items.length) break;
-
         for (const it of items) {
-          const ext = String(it.contentid || `${it.title}|${it.addr1||''}`);
+          const ext = String(it.contentid ?? `${it.title ?? ''}|${areaCode}`);
           out.push({
             source: 'tourapi',
-            dataset: 'attraction',
+            dataset: 'attractions',
             external_id: ext,
             lang,
             payload: it,
-            city: it.areacode ? String(it.areacode) : null
+            city: it.addr1 ?? null
           });
         }
         if (items.length < 100) break;
-        page++;
-        await sleep(300);
+        await sleep(120);
       }
-      await sleep(300);
+      await sleep(250);
     }
   }
   if (out.length) {
-    const res = await upsert('raw_sources', out);
-    console.log('saved attractions:', res.count);
+    const r = await upsert('raw_sources', out);
+    console.log('tourapi attractions saved:', r.count);
   } else {
-    console.log('no attractions rows');
+    console.log('tourapi attractions: no items');
   }
 }
-
 run().catch(e => { console.error(e); process.exit(1); });
