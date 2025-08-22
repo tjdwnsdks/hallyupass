@@ -11,7 +11,7 @@ jobs:
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
-      DATA_GO_KR_KCISA: ${{ secrets.DATA_GO_KCISA || secrets.DATA_GO_KR_KCISA }}
+      DATA_GO_KR_KCISA: ${{ secrets.DATA_GO_KR_KCISA }}
       DAYS_AHEAD: "60"
 
     steps:
@@ -19,56 +19,10 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: "20" }
 
-      - name: Sanity | KCISA endpoint/param matrix
-        id: kcisa_sanity
-        shell: bash
-        run: |
-          set -e
-          FROM=$(date -u +%Y%m%d); TO=$(date -u -d "+7 days" +%Y%m%d)
-          RAW="${DATA_GO_KR_KCISA}"
-          ENC=$(node -e "console.log(encodeURIComponent(process.env.DATA_GO_KR_KCISA||''))")
-
-          BASES=("https://apis.data.go.kr/B553457/cultureInfo/period2" "https://apis.data.go.kr/B553457/cultureInfo/period")
-          TYPES=("" "_type=json" "resultType=json")
-          PAGERS=("cPage=1&rows=1" "pageIndex=1&pageSize=1")
-          KEYS=("RAW" "ENC")
-
-          PASS=""
-          for B in "${BASES[@]}"; do
-            for T in "${TYPES[@]}"; do
-              for P in "${PAGERS[@]}"; do
-                for K in "${KEYS[@]}"; do
-                  [ "$K" = "RAW" ] && KEYVAL="$RAW" || KEYVAL="$ENC"
-                  Q="serviceKey=${KEYVAL}&from=${FROM}&to=${TO}&${P}"
-                  [ -n "$T" ] && Q="${Q}&${T}"
-                  URL="${B}?${Q}"
-                  echo "::group::TRY ${URL}"
-                  CODE=$(curl -s -o /tmp/k.json -w "%{http_code}" "$URL")
-                  head -c 200 /tmp/k.json; echo; echo "HTTP=$CODE"
-                  echo "::endgroup::"
-                  if [ "$CODE" = "200" ]; then
-                    PASS="$URL"
-                    break 4
-                  fi
-                done
-              done
-            done
-          done
-
-          if [ -z "$PASS" ]; then
-            echo "No 200 combination found. Verify you have '한국문화정보원_한눈에보는문화정보조회서비스(B553457)' 승인 및 키 활성화."
-            exit 1
-          fi
-          echo "PASS_URL=$PASS" >> $GITHUB_OUTPUT
-
       - name: Harvest | KCISA
         run: node scripts/harvest-kcisa.mjs
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
-          DATA_GO_KR_KCISA: ${{ secrets.DATA_GO_KR_KCISA }}
 
-      - name: Verify | raw_sources kcisa (8h, fail if zero)
+      - name: Verify | raw_sources kcisa 8h
         shell: bash
         run: |
           SINCE=$(node -e "const d=new Date();d.setHours(d.getHours()-8);console.log(d.toISOString())")
@@ -76,7 +30,4 @@ jobs:
             -H "apikey: ${SUPABASE_SERVICE_ROLE}" -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE}")
           echo "$RES" | jq .
           TOTAL=$(echo "$RES" | jq '.[0].count // 0')
-          if [ "${TOTAL:-0}" -lt 1 ]; then
-            echo "No KCISA rows ingested in last 8h."
-            exit 1
-          fi
+          test "${TOTAL:-0}" -ge 1
