@@ -12,7 +12,7 @@ jobs:
       SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
       DATA_GO_KR_TOURAPI: ${{ secrets.DATA_GO_KR_TOURAPI }} # 인코딩키
       DATA_GO_KR_KEY:     ${{ secrets.DATA_GO_KR_TOURAPI }} # 별칭
-      TOUR_LANGS: ko,en              # 임시 축소(레이트리밋 회피). 안정 후 ko,en,ja,chs,cht 복구
+      TOUR_LANGS: ko,en              # 안정 후 ko,en,ja,chs,cht 복구
       DAYS_AHEAD: "60"
       AREACODES: "1,2,3,4,5,6,7,8,31,32,33,34,35,36,37,38,39"
       TRANSFORM_LOOKBACK_HOURS: "72"
@@ -28,13 +28,15 @@ jobs:
           npm init -y
           npm i @supabase/supabase-js@2
 
-      # --- Debugging step (필요 시만 사용, 평소엔 주석 처리) ---
-      - name: print-festivals-head
+      # ✅ plusDaysYmd 잔존 여부 체크
+      - name: assert-no-plusDaysYmd
         run: |
-          echo "== head scripts/harvest-tourapi-festivals.mjs =="
-          sed -n '1,25p' scripts/harvest-tourapi-festivals.mjs
-          echo "== util exports =="
-          sed -n '1,60p' scripts/lib/util.mjs
+          if grep -n "plusDaysYmd" scripts/harvest-tourapi-festivals.mjs; then
+            echo "❌ Found forbidden import 'plusDaysYmd'"
+            exit 1
+          else
+            echo "✅ No plusDaysYmd import"
+          fi
 
       - name: Harvest | festivals
         run: node scripts/harvest-tourapi-festivals.mjs
