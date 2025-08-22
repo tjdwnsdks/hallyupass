@@ -7,7 +7,7 @@ export function addDaysYmd(days, base=new Date()){
   const d=new Date(base); d.setUTCDate(d.getUTCDate()+Number(days||0));
   return todayYmd(d);
 }
-// 과거 코드 호환용 별칭
+// 과거 호환 별칭
 export const plusDaysYmd = addDaysYmd;
 
 // Sleep
@@ -21,7 +21,7 @@ export function qs(obj){
     .join('&');
 }
 
-// Fetch JSON with 투명 로깅
+// JSON fetch (XML/에러 헤드 감지)
 export async function fetchJson(url){
   const r = await fetch(url);
   const head = await r.text();
