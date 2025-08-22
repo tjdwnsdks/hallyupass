@@ -1,4 +1,3 @@
-// scripts/lib/util.mjs
 export const sleep = (ms)=>new Promise(r=>setTimeout(r, ms));
 
 export function qs(obj){
@@ -8,7 +7,7 @@ export function qs(obj){
     .join("&");
 }
 
-// 이미 %xx 포함이면 재인코딩하지 않음
+// 키가 이미 %xx 포함이면 재인코딩하지 않음
 export function encodeKeyOnce(k){
   if(!k) return "";
   return /%[0-9A-Fa-f]{2}/.test(k) ? k : encodeURIComponent(k);
@@ -19,17 +18,13 @@ export async function fetchJson(url, {retry=4, minDelayMs=800}={}){
   for(let i=0;i<=retry;i++){
     const res = await fetch(url);
     const txt = await res.text();
-    // OpenAPI XML 오류 헤더
     if(txt.startsWith("<OpenAPI_ServiceResponse") || txt.includes("<soapenv:Envelope")){
-      // 과다호출 코드(22) 백오프
       if(/LIMITED_NUMBER_OF_SERVICE_REQUESTS_EXCEEDS_ERROR|22/.test(txt)){
-        await sleep(1500*(i+1));
-        lastErr = new Error("Rate limited"); lastErr.meta={status:res.status, head:txt.slice(0,200), url};
-        continue;
+        await sleep(1500*(i+1)); lastErr = new Error("Rate limited");
+        lastErr.meta={status:res.status, head:txt.slice(0,200), url}; continue;
       }
-      lastErr = new Error("KCISA/TourAPI XML error"); lastErr.meta={status:res.status, head:txt.slice(0,200), url};
-      await sleep(300*(i+1));
-      continue;
+      lastErr = new Error("XML error"); lastErr.meta={status:res.status, head:txt.slice(0,200), url};
+      await sleep(300*(i+1)); continue;
     }
     try{
       const j = JSON.parse(txt);
@@ -37,23 +32,8 @@ export async function fetchJson(url, {retry=4, minDelayMs=800}={}){
       return j;
     }catch(e){
       lastErr = new Error("JSON parse failed"); lastErr.meta={status:res.status, head:txt.slice(0,200), url};
-      await sleep(600*(i+1));
-      continue;
+      await sleep(600*(i+1)); continue;
     }
   }
   throw lastErr;
-}
-
-export function todayYmd(){
-  const d=new Date(); const y=d.getUTCFullYear();
-  const m=String(d.getUTCMonth()+1).padStart(2,"0");
-  const day=String(d.getUTCDate()).padStart(2,"0");
-  return `${y}${m}${day}`;
-}
-export function plusDaysYmd(n){
-  const d=new Date(); d.setUTCDate(d.getUTCDate()+n);
-  const y=d.getUTCFullYear();
-  const m=String(d.getUTCMonth()+1).padStart(2,"0");
-  const day=String(d.getUTCDate()).padStart(2,"0");
-  return `${y}${m}${day}`;
 }
