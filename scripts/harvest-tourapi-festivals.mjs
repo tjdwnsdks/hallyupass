@@ -1,9 +1,8 @@
 // scripts/harvest-tourapi-festivals.mjs
-// TourAPI: 축제 수집
 import { qs, fetchJson, todayYmd, sleep } from './lib/util.mjs';
 import { createClient } from '@supabase/supabase-js';
 
-const KEY   = process.env.DATA_GO_KR_TOURAPI || process.env.DATA_GO_KR_KEY; // 디코딩 키 사용
+const KEY   = process.env.DATA_GO_KR_TOURAPI || process.env.DATA_GO_KR_KEY;
 const AREAS = (process.env.AREACODES || '1,2,3,4,5,6,7,8,31,32,33,34,35,36,37,38,39').split(',').map(s=>s.trim());
 const LANGS = (process.env.TOUR_LANGS || 'ko,en').split(',').map(s=>s.trim());
 const PER_PAGE = 100;
