@@ -1,85 +1,50 @@
-// version: 2025-08-22-01
-
-// Minimal util helpers for TourAPI/KCISA harvesters
-
-// Querystring builder (keeps keys as-is; TourAPI는 serviceKey에 별도 인코딩 불필요)
-export function qs(params = {}) {
+// scripts/lib/util.mjs
+export function qs(obj = {}) {
   const sp = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) {
+  for (const [k, v] of Object.entries(obj)) {
     if (v === undefined || v === null) continue;
+    // serviceKey는 이미 인코딩되어 있을 수 있으므로 그대로 사용
+    if (k === 'serviceKey') { sp.append(k, String(v)); continue; }
     sp.append(k, String(v));
   }
   return sp.toString();
 }
 
-// UTC YYYYMMDD
-export function todayYmd(d = new Date()) {
+export async function fetchJson(url, { retry = 3, minDelayMs = 0 } = {}) {
+  let lastErr;
+  for (let i = 0; i <= retry; i++) {
+    const t0 = Date.now();
+    const r = await fetch(url);
+    const head = await r.text();
+    const stay = Math.max(0, minDelayMs - (Date.now() - t0));
+    if (stay) await sleep(stay);
+
+    try {
+      const j = JSON.parse(head);
+      return j;
+    } catch {
+      // 비JSON 응답의 헤더(앞부분)와 상태를 meta로 전달
+      lastErr = new Error('Non-JSON response');
+      lastErr.meta = { status: r.status, head: head.slice(0, 200), url };
+      // 22(요청 제한) 같은 경우 재시도
+      if (/LIMITED_NUMBER_OF_SERVICE_REQUESTS_EXCEEDS_ERROR|SERVICE_KEY_IS_NOT_REGISTERED_ERROR/.test(head)) {
+        await sleep(2000 * (i + 1));
+        continue;
+      }
+      throw lastErr;
+    }
+  }
+  throw lastErr;
+}
+
+export function todayYmd() {
+  const d = new Date();
   const y = d.getUTCFullYear();
   const m = String(d.getUTCMonth() + 1).padStart(2, '0');
   const dd = String(d.getUTCDate()).padStart(2, '0');
   return `${y}${m}${dd}`;
 }
 
-// UTC 기준 days 가산 후 YYYYMMDD
-export function plusDaysYmd(days = 0, base = new Date()) {
-  const d = new Date(Date.UTC(
-    base.getUTCFullYear(),
-    base.getUTCMonth(),
-    base.getUTCDate()
-  ));
-  d.setUTCDate(d.getUTCDate() + Number(days || 0));
-  return todayYmd(d);
-}
-
-// sleep(ms)
 export function sleep(ms) {
   return new Promise(res => setTimeout(res, ms));
-}
-
-// fetch JSON with retry, 그리고 오류시 응답 앞부분(head) 첨부
-export async function fetchJson(url, opts = {}) {
-  const {
-    retry = 2,
-    minDelayMs = 0,
-    timeoutMs = 30000,
-  } = opts;
-
-  let lastErr;
-  for (let attempt = 0; attempt <= retry; attempt++) {
-    const started = Date.now();
-    try {
-      const ac = new AbortController();
-      const t = setTimeout(() => ac.abort(), timeoutMs);
-
-      const r = await fetch(url, { signal: ac.signal });
-      clearTimeout(t);
-
-      const text = await r.text();
-
-      // TourAPI/KCISA가 에러 시 XML(soapenv...)로 응답함 → JSON 파싱 전 가드
-      if (!r.ok) {
-        const err = new Error(`HTTP ${r.status}`);
-        err.meta = { status: r.status, head: text.slice(0, 200), url };
-        throw err;
-      }
-      if (text.trim().startsWith('<')) {
-        const err = new Error('Non-JSON response');
-        err.meta = { status: r.status, head: text.slice(0, 200), url };
-        throw err;
-      }
-
-      const json = JSON.parse(text);
-
-      // 최소 지연 보장(레이트리밋 회피)
-      const spent = Date.now() - started;
-      if (minDelayMs > spent) await sleep(minDelayMs - spent);
-
-      return json;
-    } catch (e) {
-      lastErr = e;
-      // 레이트리밋/간헐 오류 백오프
-      await sleep(800 * (attempt + 1));
-    }
-  }
-  throw lastErr;
 }
