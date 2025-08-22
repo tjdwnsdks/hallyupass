@@ -1,70 +1,73 @@
-// TourAPI 관광지(contentTypeId=12) → raw_sources(dataset: 'attraction')
-import { qs } from './lib/util.mjs';
-import { upsertRaw } from './lib/db.mjs';
+import { qs, fetchJson, sleep } from './lib/util.mjs';
+import { createClient } from '@supabase/supabase-js';
 
-function buildUrl(base, rawKey, params){
-  const rest = qs(params);
-  return `${base}?serviceKey=${rawKey}${rest ? `&${rest}` : ''}`;
+const KEY   = process.env.DATA_GO_KR_TOURAPI || process.env.DATA_GO_KR_KEY; // 인코딩키
+const BASE  = 'https://apis.data.go.kr/B551011/KorService2/areaBasedList2';
+const AREAS = (process.env.AREACODES || '1,2,3,4,5,6,7,8,31,32,33,34,35,36,37,38,39').split(',').map(s=>s.trim());
+const LANGS = (process.env.TOUR_LANGS || 'ko,en').split(',').map(s=>s.trim());
+const PER_PAGE = 100;
+
+const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE);
+
+function baseParams(lang){
+  return {
+    serviceKey: KEY, _type: 'json',
+    MobileOS: 'ETC', MobileApp: 'HallyuPass',
+    contentTypeId: 12, numOfRows: PER_PAGE, arrange: 'C',
+    pageNo: 1, lang
+  };
+}
+async function upsertRaw(rows){
+  if(!rows.length) return;
+  const { error } = await sb.from('raw_sources').upsert(rows, { onConflict: 'source,dataset,external_id,lang' });
+  if(error) throw new Error(`upsert raw_sources error: ${error.message}`);
 }
 
-async function fetchPage({ key, areaCode, lang, pageNo }){
-  const base = 'https://apis.data.go.kr/B551011/KorService2/areaBasedList2';
-  const url = buildUrl(base, key, {
-    _type: 'json',
-    MobileOS: 'ETC',
-    MobileApp: 'HallyuPass',
-    contentTypeId: 12,          // 관광지
-    areaCode,
-    numOfRows: 100,
-    arrange: 'C',
-    pageNo,
-    lang
-  });
+async function fetchAreaLang(area, lang){
+  console.log(`[FETCH] attraction area=${area} lang=${lang}`);
+  let page = 1, saved=0;
+  while(true){
+    const url = `${BASE}?`+qs({...baseParams(lang), areaCode:area, pageNo:page});
+    console.log(`[GET attraction] ${url}`);
+    let j;
+    try{
+      j = await fetchJson(url, {minDelayMs: 900, retry: 4});
+    }catch(e){
+      const head=e?.meta?.head||'';
+      if(/22/.test(head)){ console.warn('RATE LIMIT. sleep 60s'); await sleep(60000); continue; }
+      throw e;
+    }
+    const items = j?.response?.body?.items?.item || [];
+    if(items.length===0) break;
 
-  console.log('[GET attraction]', url);
-  const r = await fetch(url, { headers: { Accept: 'application/json' } });
-  const txt = await r.text();
-  let items = [];
-  try{
-    const j = JSON.parse(txt);
-    items = j?.response?.body?.items?.item || [];
-    if (!Array.isArray(items)) items = items ? [items] : [];
-  }catch(e){
-    console.error('Non-JSON head:', txt.slice(0,200));
-    console.error('URL:', url);
-    throw e;
+    const rows = items.map(it=>({
+      source:'tourapi', dataset:'attraction',
+      external_id:String(it.contentid||it.contentId),
+      lang, payload:it, fetched_at:new Date().toISOString(),
+      city: it.sigungucode ? String(it.sigungucode) : null
+    }));
+    await upsertRaw(rows);
+    saved += rows.length;
+
+    const total = j?.response?.body?.totalCount || 0;
+    const maxPages = Math.ceil(total / PER_PAGE) || 1;
+    if(page>=maxPages) break;
+    page++;
+    await sleep(1100);
   }
-  return items;
+  return saved;
 }
 
 async function run(){
-  const key   = process.env.DATA_GO_KR_TOURAPI; // 인코딩 키
-  const langs = (process.env.TOUR_LANGS || 'ko').split(',').map(s=>s.trim()).filter(Boolean);
-  const areas = (process.env.AREACODES || '1').split(',').map(s=>s.trim()).filter(Boolean);
-
-  for (const lang of langs){
-    for (const areaCode of areas){
-      console.log(`[FETCH] attraction area=${areaCode} lang=${lang}`);
-      for (let page=1; page<=20; page++){
-        const items = await fetchPage({ key, areaCode, lang, pageNo: page });
-        if (items.length === 0) break;
-
-        for (const it of items){
-          const row = {
-            source: 'tourapi',
-            dataset: 'attraction',
-            external_id: String(it.contentid),
-            lang,
-            payload: it,
-            event_start: null,
-            event_end: null,
-            city: it.addr1 || null
-          };
-          try{ await upsertRaw(row); }catch(err){ console.error('upsert error:', err.message); }
-        }
-        if (items.length < 100) break;
-      }
+  let total=0;
+  for(const lang of LANGS){
+    for(const area of AREAS){
+      const c = await fetchAreaLang(area, lang);
+      total += (c||0);
+      await sleep(500);
     }
   }
+  console.log('attractions saved:', total);
 }
-run().catch(e=>{ console.error(e); process.exit(1); });
+
+run().catch(e=>{ console.error(e?.meta||e); process.exit(1); });
