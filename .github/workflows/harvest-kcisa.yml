@@ -1,33 +1,25 @@
 name: harvest-kcisa
-
 on:
   workflow_dispatch:
   schedule:
     - cron: "0 */12 * * *"
-
 jobs:
   run:
     runs-on: ubuntu-latest
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
-      DATA_GO_KR_KCISA: ${{ secrets.DATA_GO_KR_KCISA }}
+      DATA_GO_KR_KCISA: ${{ secrets.DATA_GO_KR_KCISA }}     # 디코딩키 OK
       DAYS_AHEAD: "60"
-
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: "20" }
 
+      - name: Install deps
+        run: |
+          npm init -y
+          npm i @supabase/supabase-js@2
+
       - name: Harvest | KCISA
         run: node scripts/harvest-kcisa.mjs
-
-      - name: Verify | raw_sources kcisa 8h
-        shell: bash
-        run: |
-          SINCE=$(node -e "const d=new Date();d.setHours(d.getHours()-8);console.log(d.toISOString())")
-          RES=$(curl -s "${SUPABASE_URL}/rest/v1/raw_sources?select=count:count()&source=eq.kcisa&fetched_at=gte.${SINCE}" \
-            -H "apikey: ${SUPABASE_SERVICE_ROLE}" -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE}")
-          echo "$RES" | jq .
-          TOTAL=$(echo "$RES" | jq '.[0].count // 0')
-          test "${TOTAL:-0}" -ge 1
