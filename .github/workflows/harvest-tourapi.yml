@@ -10,28 +10,32 @@ jobs:
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
-      DATA_GO_KR_TOURAPI: ${{ secrets.DATA_GO_KR_TOURAPI }}
-      DATA_GO_KR_KEY:     ${{ secrets.DATA_GO_KR_TOURAPI }}
+      DATA_GO_KR_TOURAPI: ${{ secrets.DATA_GO_KR_TOURAPI }}  # 인코딩/디코딩 무관. 스크립트가 정규화
       TOUR_LANGS: ko,en
       DAYS_AHEAD: "60"
       AREACODES: "1,2,3,4,5,6,7,8,31,32,33,34,35,36,37,38,39"
       TRANSFORM_LOOKBACK_HOURS: "72"
-      TOURAPI_SVC: KorService2
 
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: "20" }
 
-      - name: Install deps
+      - name: install deps
         run: |
           npm init -y
           npm i @supabase/supabase-js@2
 
-      - name: Debug util.mjs exports
-        run: |
-          echo "== util head ==" && sed -n '1,80p' scripts/lib/util.mjs
-          node -e "import('./scripts/lib/util.mjs').then(m=>console.log('exports:',Object.keys(m)))"
-
-      - name: Harvest | festivals
+      - name: harvest festivals
         run: node scripts/harvest-tourapi-festivals.mjs
+      - name: harvest attractions
+        run: node scripts/harvest-tourapi-attractions.mjs
+      - name: harvest food
+        run: node scripts/harvest-tourapi-food.mjs
+      - name: harvest stay
+        run: node scripts/harvest-tourapi-accommodation.mjs
+
+      - name: transform festivals → events
+        run: node scripts/transform-events.mjs
+      - name: transform places → events
+        run: node scripts/transform-places-to-events.mjs
