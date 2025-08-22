@@ -1,73 +1,59 @@
 // scripts/lib/util.mjs
-// 공통 유틸: 쿼리스트링, 날짜, JSON fetch, 키 이중 인코딩 방지
+export const sleep = (ms)=>new Promise(r=>setTimeout(r, ms));
 
-/** 객체 -> querystring(string or object 모두 허용) */
-export function qs(baseOrObj, obj) {
-  if (typeof baseOrObj === 'string') {
-    const u = new URL(baseOrObj);
-    const params = new URLSearchParams();
-    for (const [k, v] of Object.entries(obj || {})) {
-      if (v === undefined || v === null || v === '') continue;
-      params.append(k, String(v));
-    }
-    u.search = params.toString();
-    return u.toString();
-  }
-  const p = new URLSearchParams();
-  for (const [k, v] of Object.entries(baseOrObj || {})) {
-    if (v === undefined || v === null || v === '') continue;
-    p.append(k, String(v));
-  }
-  return p.toString();
+export function qs(obj){
+  return Object.entries(obj)
+    .filter(([,v])=>v!==undefined && v!==null && v!=="")
+    .map(([k,v])=>`${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+    .join("&");
 }
 
-/** YYYYMMDD (UTC) */
-export function todayYmd(d = new Date()) {
-  const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(d.getUTCDate()).padStart(2, '0');
+// 이미 %xx 포함이면 재인코딩하지 않음
+export function encodeKeyOnce(k){
+  if(!k) return "";
+  return /%[0-9A-Fa-f]{2}/.test(k) ? k : encodeURIComponent(k);
+}
+
+export async function fetchJson(url, {retry=4, minDelayMs=800}={}){
+  let lastErr;
+  for(let i=0;i<=retry;i++){
+    const res = await fetch(url);
+    const txt = await res.text();
+    // OpenAPI XML 오류 헤더
+    if(txt.startsWith("<OpenAPI_ServiceResponse") || txt.includes("<soapenv:Envelope")){
+      // 과다호출 코드(22) 백오프
+      if(/LIMITED_NUMBER_OF_SERVICE_REQUESTS_EXCEEDS_ERROR|22/.test(txt)){
+        await sleep(1500*(i+1));
+        lastErr = new Error("Rate limited"); lastErr.meta={status:res.status, head:txt.slice(0,200), url};
+        continue;
+      }
+      lastErr = new Error("KCISA/TourAPI XML error"); lastErr.meta={status:res.status, head:txt.slice(0,200), url};
+      await sleep(300*(i+1));
+      continue;
+    }
+    try{
+      const j = JSON.parse(txt);
+      await sleep(minDelayMs);
+      return j;
+    }catch(e){
+      lastErr = new Error("JSON parse failed"); lastErr.meta={status:res.status, head:txt.slice(0,200), url};
+      await sleep(600*(i+1));
+      continue;
+    }
+  }
+  throw lastErr;
+}
+
+export function todayYmd(){
+  const d=new Date(); const y=d.getUTCFullYear();
+  const m=String(d.getUTCMonth()+1).padStart(2,"0");
+  const day=String(d.getUTCDate()).padStart(2,"0");
   return `${y}${m}${day}`;
 }
-
-export function plusDaysYmd(n, base = new Date()) {
-  const d = new Date(base);
-  d.setUTCDate(d.getUTCDate() + Number(n || 0));
-  return todayYmd(d);
-}
-
-/** 안전한 경로 접근 a.b.c */
-function getByPath(obj, path) {
-  if (!path) return obj;
-  return String(path).split('.').reduce(
-    (acc, k) => (acc && acc[k] !== undefined ? acc[k] : undefined),
-    obj
-  );
-}
-
-/** 페이지네이션 helper: urlBuilder(pageNo) 형태도 지원 */
-export async function* pagedJson(urlOrBuilder, itemsPath, { maxPages = 100 } = {}) {
-  for (let page = 1; page <= maxPages; page++) {
-    const url = typeof urlOrBuilder === 'function' ? urlOrBuilder(page) : urlOrBuilder;
-    const r = await fetch(url, { headers: { Accept: 'application/json' } });
-    const text = await r.text();
-    const ct = r.headers.get('content-type') || '';
-    const looksJson = ct.includes('application/json') || text.trim().startsWith('{') || text.trim().startsWith('[');
-    if (!looksJson) {
-      console.error('Non-JSON response head:', text.slice(0, 200));
-      console.error('URL:', url);
-      throw new Error('Response is not JSON');
-    }
-    const data = JSON.parse(text);
-    yield itemsPath ? getByPath(data, itemsPath) ?? [] : data;
-    // 종료 조건은 호출 측에서 items 길이로 판단
-  }
-}
-
-/** 공공데이터포털 키 이중 인코딩 방지 */
-export function encodeKeyOnce(raw) {
-  const key = String(raw ?? '');
-  // 이미 퍼센트 인코딩 흔적이 있으면 그대로 사용
-  if (/%[0-9A-Fa-f]{2}/.test(key)) return key;
-  try { decodeURIComponent(key); } catch { /* no-op */ }
-  return encodeURIComponent(key);
+export function plusDaysYmd(n){
+  const d=new Date(); d.setUTCDate(d.getUTCDate()+n);
+  const y=d.getUTCFullYear();
+  const m=String(d.getUTCMonth()+1).padStart(2,"0");
+  const day=String(d.getUTCDate()).padStart(2,"0");
+  return `${y}${m}${day}`;
 }
