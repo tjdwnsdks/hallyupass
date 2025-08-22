@@ -1,105 +1,107 @@
-// scripts/harvest-tourapi-festivals.mjs
-import * as UTIL from './lib/util.mjs';
-import { upsert } from './lib/sb.mjs';
+import { createClient } from '@supabase/supabase-js';
+import { qs, fetchJson, normalizeKey, todayYmd, addDaysYmd, sleep } from './lib/util.mjs';
 
-// util.mjs와의 호환(fallback)
-const qs   = UTIL.qs;
-const fetchJson = UTIL.fetchJson;
-const sleep = UTIL.sleep ?? (ms=>new Promise(r=>setTimeout(r,ms)));
-const todayYmd = UTIL.todayYmd ?? (()=> new Date().toISOString().slice(0,10).replace(/-/g,''));
-const addDaysYmd = UTIL.addDaysYmd ?? (n => { const d=new Date(); d.setUTCDate(d.getUTCDate()+n); return d.toISOString().slice(0,10).replace(/-/g,''); });
-const normalizeKey = UTIL.normalizeKey ?? (k => {
-  try { return encodeURIComponent(decodeURIComponent(k)); } catch { return encodeURIComponent(k); }
-});
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE;
+const DAYS_AHEAD = Number(process.env.DAYS_AHEAD || '60');
+const LANGS = (process.env.TOUR_LANGS || 'ko').split(',').map(s => s.trim()).filter(Boolean);
+const AREAS = (process.env.AREACODES || '1').split(',').map(s => s.trim()).filter(Boolean);
+const DELAY = Number(process.env.TOURAPI_DELAY_MS || '1200'); // 호출 간 딜레이(ms)
+const PAGES = 3; // 3페이지(최대 300건/요청)
 
-const KEY   = normalizeKey(process.env.DATA_GO_KR_TOURAPI || process.env.DATA_GO_KR_KEY || '');
-const AHEAD = Number(process.env.DAYS_AHEAD || '60');
+const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE);
 
-let LANGS = String(process.env.TOUR_LANGS || 'ko,en').split(',').map(s=>s.trim()).filter(Boolean);
-let AREAS = String(process.env.AREACODES  || '1,2,3,4,5,6,7,8,31,32,33,34,35,36,37,38,39').split(',').map(s=>s.trim()).filter(Boolean);
-
-// 테스트 축소(원하면 env로 제한)
-const MAX_LANGS = Number(process.env.MAX_LANGS || '0');
-const MAX_AREAS = Number(process.env.MAX_AREAS || '0');
-if (MAX_LANGS > 0) LANGS = LANGS.slice(0, MAX_LANGS);
-if (MAX_AREAS > 0) AREAS = AREAS.slice(0, MAX_AREAS);
-
-const BASE = 'https://apis.data.go.kr/B551011/KorService2/searchFestival2';
-const NUM  = Number(process.env.ROW_SIZE || '50');
-
-async function fetchPageOnce({ lang, areaCode, start, end, pageNo }){
-  const url = `${BASE}?` + qs({
-    serviceKey: KEY, _type: 'json',
-    MobileOS: 'ETC', MobileApp: 'HallyuPass',
-    eventStartDate: start, eventEndDate: end,
-    areaCode, numOfRows: NUM, arrange: 'C', pageNo, lang
-  });
-  const j = await fetchJson(url, { label:'tourapi' });
-  const body = j?.response?.body;
-  const items = body?.items?.item || [];
-  return Array.isArray(items) ? items : (items ? [items] : []);
+function pickItems(json) {
+  // TourAPI 표준 JSON
+  const items = json?.response?.body?.items?.item ?? [];
+  return Array.isArray(items) ? items : [items].filter(Boolean);
 }
 
-async function fetchPageWithRetry(args){
-  let delay = 1500;
-  for (let attempt=0; attempt<3; attempt++){
-    try{
-      return await fetchPageOnce(args);
-    }catch(e){
-      const head = (e && e.head) || '';
-      if (head.includes('LIMITED_NUMBER_OF_SERVICE_REQUESTS_EXCEEDS_ERROR')){
-        console.warn(`[tourapi] rate-limit, retry in ${delay}ms`);
-        await sleep(delay);
-        delay *= 2;
+async function getWithBackoff(url) {
+  for (let i = 1; i <= 6; i++) {
+    try {
+      return await fetchJson(url);
+    } catch (e) {
+      const head = e.head || '';
+      // 레이트리밋 메시지 감지
+      if (head.includes('LIMITED_NUMBER_OF_SERVICE_REQUESTS_EXCEEDS_ERROR')) {
+        const wait = 15000 * i; // 15s, 30s, ...
+        console.log(`[tourapi] rate-limited(22). retry #${i} in ${wait}ms :: ${url}`);
+        await sleep(wait);
         continue;
       }
+      // XML 등 비JSON이면 바로 실패
       throw e;
     }
   }
   throw new Error('tourapi: rate-limit retries exceeded');
 }
 
-async function run(){
-  const start = todayYmd();
-  const end   = addDaysYmd(AHEAD);
-  const out   = [];
+async function run() {
+  const key = normalizeKey(process.env.DATA_GO_KR_TOURAPI || '');
+  if (!key) throw new Error('TourAPI: empty DATA_GO_KR_TOURAPI');
 
-  for (const lang of LANGS){
-    for (const area of AREAS){
-      console.log(`[FETCH] festivals area=${area} lang=${lang} ${start}-${end}`);
-      let page = 1;
-      while(true){
-        let arr;
-        try{
-          arr = await fetchPageWithRetry({ lang, areaCode:area, start, end, pageNo: page });
-        }catch(e){
-          console.warn('[tourapi] fetch failed:', e?.message || e);
-          break; // 이 지역/언어 중단
+  const from = todayYmd();
+  const to = addDaysYmd(from, DAYS_AHEAD);
+
+  let collected = 0;
+
+  for (const lang of LANGS) {
+    for (const area of AREAS) {
+      console.log(`[FETCH] festivals area=${area} lang=${lang} ${from}-${to}`);
+      for (let page = 1; page <= PAGES; page++) {
+        const base = 'https://apis.data.go.kr/B551011/KorService2/searchFestival2';
+        const params = {
+          serviceKey: key, _type: 'json',
+          MobileOS: 'ETC', MobileApp: 'HallyuPass',
+          eventStartDate: from, eventEndDate: to,
+          areaCode: area, pageNo: page, numOfRows: 100, arrange: 'C',
+          lang
+        };
+        const url = base + qs(params);
+
+        let json;
+        try {
+          json = await getWithBackoff(url);
+        } catch (e) {
+          // 레이트리밋 외의 non-JSON/HTTP 오류는 영역/언어 전환
+          console.log('[tourapi] fetch failed:', e.message || e);
+          break;
         }
 
-        for (const it of arr){
-          out.push({
-            source:'tourapi',
-            dataset:'festivals',
-            external_id: String(it.contentid),
-            lang,
-            payload: it,
-            event_start: it.eventstartdate ? String(it.eventstartdate).slice(0,8) : null,
-            event_end:   it.eventenddate   ? String(it.eventenddate).slice(0,8)   : null,
-            city: it.addr1 || null,
-          });
-        }
-        if (arr.length < NUM) break;
-        page += 1;
-        await sleep(1000); // 페이지 사이 슬립
+        const items = pickItems(json);
+        if (items.length === 0) break; // 다음 지역으로
+
+        // 적재
+        const rows = items.map(it => ({
+          source: 'tourapi',
+          dataset: 'festivals',
+          external_id: String(it?.contentid ?? ''),
+          lang: lang || null,
+          payload: it,
+          fetched_at: new Date().toISOString(),
+          event_start: null,
+          event_end: null,
+          city: null
+        }));
+
+        const { error } = await sb.from('raw_sources').insert(rows);
+        if (error) throw error;
+
+        collected += rows.length;
+        // 과도한 호출 방지
+        await sleep(DELAY);
       }
-      await sleep(2500);   // 지역 사이 슬립(레이트리밋 완화)
+      // 지역 간에도 약간 슬립
+      await sleep(DELAY);
     }
   }
 
-  if (!out.length) throw new Error('TourAPI: no items');
-  const r = await upsert('raw_sources', out);
-  console.log('tourapi festivals saved:', r.count);
+  if (collected === 0) {
+    throw new Error('TourAPI: no items');
+  } else {
+    console.log(`[TourAPI] inserted ${collected} rows`);
+  }
 }
 
-run().catch(e=>{ console.error(e); process.exit(1); });
+run().catch(e => { throw e; });
