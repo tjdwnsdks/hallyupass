@@ -9,7 +9,10 @@ const sb = createClient(url, key, { auth: { persistSession: false } });
 
 export async function upsert(table, rows) {
   if (!rows?.length) return { count: 0 };
-  const { data, error, count } = await sb.from(table).upsert(rows, { onConflict: 'id' }).select('id', { count: 'exact' });
+  const { data, error, count } = await sb
+    .from(table)
+    .upsert(rows, { onConflict: 'source,dataset,external_id,lang' })
+    .select('id', { count: 'exact' });
   if (error) throw error;
   return { data, count: count ?? data?.length ?? 0 };
 }
