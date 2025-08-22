@@ -2,7 +2,7 @@ import { qs, fetchJson, todayYmd, addDaysYmd, sleep } from './lib/util.mjs';
 import { upsert } from './lib/sb.mjs';
 
 const KEY  = process.env.DATA_GO_KR_TOURAPI || process.env.DATA_GO_KR_KEY;
-const SVC  = process.env.TOURAPI_SVC || 'KorService2'; // 필요 시 KorService2로 변경
+const SVC  = process.env.TOURAPI_SVC || 'KorService2'; // ← 기본값 2로
 const BASE = `https://apis.data.go.kr/B551011/${SVC}`;
 
 const AHEAD = Number(process.env.DAYS_AHEAD || '60');
@@ -22,16 +22,14 @@ async function fetchPage(url){
   if(!res.ok){
     console.error('Non-JSON head:', res.head.slice(0,200));
     console.error('URL:', res.url);
-    throw new Error('TourAPI non-JSON (키/엔드포인트/쿼터 이슈)');
+    throw new Error('TourAPI non-JSON');
   }
   return res.json?.response?.body?.items?.item || [];
 }
 
-function yyyymmddToDateStr8(s){
-  if(!s) return null;
-  const m = String(s).match(/^(\d{4})(\d{2})(\d{2})$/);
-  if(!m) return null;
-  return `${m[1]}-${m[2]}-${m[3]}`;
+function ymd8ToISO(s){
+  const m=String(s||'').match(/^(\d{4})(\d{2})(\d{2})$/);
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
 }
 
 async function run(){
@@ -57,10 +55,10 @@ async function run(){
         for(const it of items){
           const ext = String(it.contentid || `${it.title}|${it.eventstartdate||''}|${it.addr1||''}`);
           out.push({
-            source:'tourapi', dataset:'festival', external_id:ext, lang,
+            source:'tourapi', dataset:'festival', external_id: ext, lang,
             payload: it,
-            event_start: yyyymmddToDateStr8(it.eventstartdate),
-            event_end:   yyyymmddToDateStr8(it.eventenddate),
+            event_start: ymd8ToISO(it.eventstartdate),
+            event_end:   ymd8ToISO(it.eventenddate),
             city: it.areacode ? String(it.areacode) : null
           });
         }
