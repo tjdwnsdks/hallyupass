@@ -1,38 +1,82 @@
-export const sleep = (ms)=>new Promise(r=>setTimeout(r, ms));
+// Minimal util helpers for TourAPI/KCISA harvesters
 
-export function qs(obj){
-  return Object.entries(obj)
-    .filter(([,v])=>v!==undefined && v!==null && v!=="")
-    .map(([k,v])=>`${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
-    .join("&");
+// Querystring builder (keeps keys as-is; TourAPI는 serviceKey에 별도 인코딩 불필요)
+export function qs(params = {}) {
+  const sp = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null) continue;
+    sp.append(k, String(v));
+  }
+  return sp.toString();
 }
 
-// 키가 이미 %xx 포함이면 재인코딩하지 않음
-export function encodeKeyOnce(k){
-  if(!k) return "";
-  return /%[0-9A-Fa-f]{2}/.test(k) ? k : encodeURIComponent(k);
+// UTC YYYYMMDD
+export function todayYmd(d = new Date()) {
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  return `${y}${m}${dd}`;
 }
 
-export async function fetchJson(url, {retry=4, minDelayMs=800}={}){
+// UTC 기준 days 가산 후 YYYYMMDD
+export function plusDaysYmd(days = 0, base = new Date()) {
+  const d = new Date(Date.UTC(
+    base.getUTCFullYear(),
+    base.getUTCMonth(),
+    base.getUTCDate()
+  ));
+  d.setUTCDate(d.getUTCDate() + Number(days || 0));
+  return todayYmd(d);
+}
+
+// sleep(ms)
+export function sleep(ms) {
+  return new Promise(res => setTimeout(res, ms));
+}
+
+// fetch JSON with retry, 그리고 오류시 응답 앞부분(head) 첨부
+export async function fetchJson(url, opts = {}) {
+  const {
+    retry = 2,
+    minDelayMs = 0,
+    timeoutMs = 30000,
+  } = opts;
+
   let lastErr;
-  for(let i=0;i<=retry;i++){
-    const res = await fetch(url);
-    const txt = await res.text();
-    if(txt.startsWith("<OpenAPI_ServiceResponse") || txt.includes("<soapenv:Envelope")){
-      if(/LIMITED_NUMBER_OF_SERVICE_REQUESTS_EXCEEDS_ERROR|22/.test(txt)){
-        await sleep(1500*(i+1)); lastErr = new Error("Rate limited");
-        lastErr.meta={status:res.status, head:txt.slice(0,200), url}; continue;
+  for (let attempt = 0; attempt <= retry; attempt++) {
+    const started = Date.now();
+    try {
+      const ac = new AbortController();
+      const t = setTimeout(() => ac.abort(), timeoutMs);
+
+      const r = await fetch(url, { signal: ac.signal });
+      clearTimeout(t);
+
+      const text = await r.text();
+
+      // TourAPI/KCISA가 에러 시 XML(soapenv...)로 응답함 → JSON 파싱 전 가드
+      if (!r.ok) {
+        const err = new Error(`HTTP ${r.status}`);
+        err.meta = { status: r.status, head: text.slice(0, 200), url };
+        throw err;
       }
-      lastErr = new Error("XML error"); lastErr.meta={status:res.status, head:txt.slice(0,200), url};
-      await sleep(300*(i+1)); continue;
-    }
-    try{
-      const j = JSON.parse(txt);
-      await sleep(minDelayMs);
-      return j;
-    }catch(e){
-      lastErr = new Error("JSON parse failed"); lastErr.meta={status:res.status, head:txt.slice(0,200), url};
-      await sleep(600*(i+1)); continue;
+      if (text.trim().startsWith('<')) {
+        const err = new Error('Non-JSON response');
+        err.meta = { status: r.status, head: text.slice(0, 200), url };
+        throw err;
+      }
+
+      const json = JSON.parse(text);
+
+      // 최소 지연 보장(레이트리밋 회피)
+      const spent = Date.now() - started;
+      if (minDelayMs > spent) await sleep(minDelayMs - spent);
+
+      return json;
+    } catch (e) {
+      lastErr = e;
+      // 레이트리밋/간헐 오류 백오프
+      await sleep(800 * (attempt + 1));
     }
   }
   throw lastErr;
