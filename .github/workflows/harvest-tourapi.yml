@@ -10,16 +10,18 @@ jobs:
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
-      DATA_GO_KR_TOURAPI: ${{ secrets.DATA_GO_KR_TOURAPI }}   # 인코딩키(Encoding)
-      DATA_GO_KR_KEY:     ${{ secrets.DATA_GO_KR_TOURAPI }}   # 별칭
+      DATA_GO_KR_TOURAPI: ${{ secrets.DATA_GO_KR_TOURAPI }} # 인코딩키
+      DATA_GO_KR_KEY:     ${{ secrets.DATA_GO_KR_TOURAPI }}
       TOUR_LANGS: ko,en
       DAYS_AHEAD: "60"
       AREACODES: "1,2,3,4,5,6,7,8,31,32,33,34,35,36,37,38,39"
       TRANSFORM_LOOKBACK_HOURS: "72"
-      TOURAPI_SVC: KorService2   # ★핫픽스: 1로 강제 (2에서 오류시)
+      TOURAPI_SVC: KorService2
 
     steps:
       - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
       - uses: actions/setup-node@v4
         with: { node-version: "20" }
 
@@ -28,26 +30,12 @@ jobs:
           npm init -y
           npm i @supabase/supabase-js@2
 
-      - name: echo heads
+      # 디버그: util과 헤더 확인
+      - name: print-festivals-head
         run: |
-          echo "== harvest-tourapi-festivals.mjs head =="; sed -n '1,40p' scripts/harvest-tourapi-festivals.mjs
-          echo "== harvest-tourapi-attractions.mjs head =="; sed -n '1,40p' scripts/harvest-tourapi-attractions.mjs
-          echo "== util.mjs head =="; sed -n '1,120p' scripts/lib/util.mjs
+          echo "== head scripts/harvest-tourapi-festivals.mjs ==" && sed -n '1,20p' scripts/harvest-tourapi-festivals.mjs
+          echo "== util exports ==" && sed -n '1,120p' scripts/lib/util.mjs
+          node -e "import('./scripts/lib/util.mjs').then(m=>console.log(Object.keys(m)))"
 
       - name: Harvest | festivals
         run: node scripts/harvest-tourapi-festivals.mjs
-
-      - name: Harvest | attractions
-        run: node scripts/harvest-tourapi-attractions.mjs
-
-      - name: Harvest | food
-        run: node scripts/harvest-tourapi-food.mjs || true   # 레이트리밋시 넘어감
-
-      - name: Harvest | stay
-        run: node scripts/harvest-tourapi-accommodation.mjs || true
-
-      - name: Transform | festivals → events
-        run: node scripts/transform-events.mjs
-
-      - name: Transform | places → events
-        run: node scripts/transform-places-to-events.mjs
