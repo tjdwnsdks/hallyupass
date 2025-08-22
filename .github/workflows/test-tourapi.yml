@@ -1,0 +1,27 @@
+name: test-tourapi
+on: workflow_dispatch
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    env:
+      KEY: ${{ secrets.DATA_GO_KR_TOURAPI }}
+    steps:
+      - name: curl KorService2
+        run: |
+          set -e
+          FROM=$(date -u +%Y%m%d); TO=$(date -u -d "+7 days" +%Y%m%d)
+          BASE="https://apis.data.go.kr/B551011/KorService2/searchFestival2"
+          echo "[GET] $BASE"
+          code=$(curl -s -o /tmp/t.json -w "%{http_code}" -G "$BASE" \
+            --data-urlencode "serviceKey=${KEY}" \
+            --data-urlencode "_type=json" \
+            --data-urlencode "MobileOS=ETC" \
+            --data-urlencode "MobileApp=HallyuPass" \
+            --data-urlencode "eventStartDate=$FROM" \
+            --data-urlencode "eventEndDate=$TO" \
+            --data-urlencode "areaCode=1" \
+            --data-urlencode "numOfRows=1" \
+            --data-urlencode "pageNo=1")
+          head -c 300 /tmp/t.json; echo; echo "HTTP=$code"
+          test "$code" = "200"
