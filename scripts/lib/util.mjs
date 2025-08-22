@@ -1,3 +1,5 @@
+// version: 2025-08-22-01
+
 // Minimal util helpers for TourAPI/KCISA harvesters
 
 // Querystring builder (keeps keys as-is; TourAPI는 serviceKey에 별도 인코딩 불필요)
