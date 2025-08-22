@@ -1,4 +1,4 @@
-// scripts/harvest-tourapi-festivals.mjs  ← 전체 교체
+// scripts/harvest-tourapi-festivals.mjs
 import { qs, fetchJson, todayYmd, sleep } from './lib/util.mjs';
 import { createClient } from '@supabase/supabase-js';
 
@@ -11,12 +11,10 @@ const SVC = { ko:'KorService2', en:'EngService2', ja:'JpnService2', chs:'ChsServ
 
 const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE);
 
-// YYYYMMDD 문자열에 days 더하기(UTC)
-function addDaysYmd(baseYmd, days){
-  const y = Number(baseYmd.slice(0,4));
-  const m = Number(baseYmd.slice(4,6)) - 1;
-  const d = Number(baseYmd.slice(6,8));
-  const dt = new Date(Date.UTC(y,m,d));
+// YYYYMMDD + days (UTC)
+function addDaysYmd(ymd, days){
+  const y = Number(ymd.slice(0,4)), m = Number(ymd.slice(4,6)) - 1, d = Number(ymd.slice(6,8));
+  const dt = new Date(Date.UTC(y, m, d));
   dt.setUTCDate(dt.getUTCDate() + Number(days||0));
   const yy = dt.getUTCFullYear();
   const mm = String(dt.getUTCMonth()+1).padStart(2,'0');
@@ -47,8 +45,9 @@ async function fetchAreaLang(area, lang, fromYmd, toYmd){
       j = await fetchJson(url, { minDelayMs:900, retry:4 });
     }catch(e){
       const head = e?.meta?.head || '';
+      console.warn('Non-JSON head:', head);
       if(/LIMITED_NUMBER_OF_SERVICE_REQUESTS_EXCEEDS_ERROR|22/.test(head)){
-        console.warn('RATE LIMIT. sleep 60s');
+        console.warn('RATE LIMIT → sleep 60s');
         await sleep(60000);
         continue;
       }
