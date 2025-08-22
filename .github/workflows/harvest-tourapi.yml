@@ -1,40 +1,63 @@
 name: harvest-tourapi
+
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */6 * * *"
+    - cron: "0 */6 * * *"   # 6시간마다(UTC)
+
 jobs:
   run:
     runs-on: ubuntu-latest
+
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
-      DATA_GO_KR_TOURAPI: ${{ secrets.DATA_GO_KR_TOURAPI }} # 인코딩키
-      DATA_GO_KR_KEY:     ${{ secrets.DATA_GO_KR_TOURAPI }} # 별칭
-      TOUR_LANGS: ko,en              # 임시 축소(레이트리밋 회피). 안정 후 ko,en,ja,chs,cht 복구
+      DATA_GO_KR_TOURAPI: ${{ secrets.DATA_GO_KR_TOURAPI }}   # 인코딩 키
+      DATA_GO_KR_KEY:     ${{ secrets.DATA_GO_KR_TOURAPI }}   # 별칭(동일 값)
+      TOUR_LANGS: ko,en                                        # 초기엔 ko,en만 (레이트리밋 회피)
       DAYS_AHEAD: "60"
       AREACODES: "1,2,3,4,5,6,7,8,31,32,33,34,35,36,37,38,39"
       TRANSFORM_LOOKBACK_HOURS: "72"
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: "20" }
 
-      - name: Install deps
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: setup-node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: install deps (@supabase/supabase-js)
         run: |
           npm init -y
           npm i @supabase/supabase-js@2
 
+      # --- 디버깅 보조: 교체본이 맞는지 확인(필요 없으면 삭제 가능) ---
+      - name: print-festivals-head
+        run: |
+          echo "== head scripts/harvest-tourapi-festivals.mjs =="
+          sed -n '1,20p' scripts/harvest-tourapi-festivals.mjs
+          echo "== util exports =="
+          sed -n '1,80p' scripts/lib/util.mjs
+      # -------------------------------------------------------------------
+
+      # 1) 수집
       - name: Harvest | festivals
         run: node scripts/harvest-tourapi-festivals.mjs
+
       - name: Harvest | attractions
         run: node scripts/harvest-tourapi-attractions.mjs
+
       - name: Harvest | food
         run: node scripts/harvest-tourapi-food.mjs
+
       - name: Harvest | stay
         run: node scripts/harvest-tourapi-accommodation.mjs
 
+      # 2) 변환(정규화)
       - name: Transform | festivals → events
         run: node scripts/transform-events.mjs
+
       - name: Transform | places → events
         run: node scripts/transform-places-to-events.mjs
