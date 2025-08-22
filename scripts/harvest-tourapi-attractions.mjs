@@ -1,69 +1,80 @@
 import { qs, fetchJson, sleep } from './lib/util.mjs';
-import { createClient } from '@supabase/supabase-js';
+import { upsert } from './lib/sb.mjs';
 
-const KEY = process.env.DATA_GO_KR_TOURAPI || process.env.DATA_GO_KR_KEY; // 디코딩 키
-const AREAS = (process.env.AREACODES || '1,2,3,4,5,6,7,8,31,32,33,34,35,36,37,38,39').split(',').map(s=>s.trim());
-const LANGS = (process.env.TOUR_LANGS || 'ko,en').split(',').map(s=>s.trim());
-const PER_PAGE = 100;
-const SVC = { ko:'KorService2', en:'EngService2', ja:'JpnService2', chs:'ChsService2', cht:'ChtService2' };
+const KEY = process.env.DATA_GO_KR_TOURAPI || process.env.DATA_GO_KR_KEY;
+const SVC = process.env.TOURAPI_SVC || 'KorService1';
+const BASE = `https://apis.data.go.kr/B551011/${SVC}`;
+const AREAS = (process.env.AREACODES || '1').split(',').map(s=>s.trim());
+const LANGS = (process.env.TOUR_LANGS || 'ko').split(',').map(s=>s.trim());
 
-const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE);
-
-function baseParams(){
-  return { serviceKey: KEY, _type:'json', MobileOS:'ETC', MobileApp:'HallyuPass', numOfRows:PER_PAGE, arrange:'C', pageNo:1 };
+function urlAreaList({area,lang,page=1}) {
+  return `${BASE}/areaBasedList2?` + qs({
+    serviceKey: KEY,
+    _type: 'json',
+    MobileOS: 'ETC',
+    MobileApp: 'HallyuPass',
+    contentTypeId: 12,   // 관광지
+    areaCode: area,
+    numOfRows: 100,
+    arrange: 'C',
+    pageNo: page,
+    lang
+  });
 }
 
-async function upsertRaw(rows){
-  if(!rows.length) return;
-  const { error } = await sb.from('raw_sources').upsert(rows, { onConflict:'source,dataset,external_id,lang' });
-  if(error) throw new Error(`upsert raw_sources error: ${error.message}`);
-}
-
-async function fetchAreaLang(area, lang){
-  const svc = SVC[lang] || SVC.ko;
-  const base = `https://apis.data.go.kr/B551011/${svc}/areaBasedList2`;
-  console.log(`[FETCH] attraction area=${area} lang=${lang} svc=${svc}`);
-  let page=1, saved=0;
-
-  while(true){
-    const url = `${base}?` + qs({ ...baseParams(), contentTypeId:12, areaCode:area, pageNo:page });
-    console.log(`[GET attraction] ${url}`);
-    let j;
-    try{
-      j = await fetchJson(url, { minDelayMs:900, retry:4 });
-    }catch(e){
-      const head=e?.meta?.head||'';
-      if(/22/.test(head)){ console.warn('RATE LIMIT. sleep 60s'); await sleep(60000); continue; }
-      throw e;
-    }
-    const items = j?.response?.body?.items?.item || [];
-    if(items.length===0) break;
-
-    const rows = items.map(it=>({
-      source:'tourapi', dataset:'attraction',
-      external_id:String(it.contentid||it.contentId),
-      lang, payload:it, fetched_at:new Date().toISOString(),
-      city: it.sigungucode ? String(it.sigungucode) : null
-    }));
-    await upsertRaw(rows); saved += rows.length;
-
-    const total = j?.response?.body?.totalCount || 0;
-    const maxPages = Math.ceil(total / PER_PAGE) || 1;
-    if(page>=maxPages) break;
-    page++; await sleep(1100);
+async function fetchPage(url) {
+  const r = await fetch(url);
+  const head = await r.text();
+  if (!head.trim().startsWith('{')) {
+    console.error('Non-JSON head:', head.slice(0,200));
+    console.error('URL:', url);
+    throw new Error('TourAPI returned non-JSON (likely key-service mismatch or rate limit)');
   }
-  return saved;
+  const j = JSON.parse(head);
+  return j?.response?.body?.items?.item || [];
 }
 
-async function run(){
-  let total=0;
-  for(const lang of LANGS){
-    for(const area of AREAS){
-      const c = await fetchAreaLang(area, lang);
-      total += (c||0);
-      await sleep(500);
+async function run() {
+  const out = [];
+  for (const lang of LANGS) {
+    for (const area of AREAS) {
+      console.log(`[FETCH] attraction area=${area} lang=${lang}`);
+      let page = 1, loops = 0;
+      while (true) {
+        const url = urlAreaList({area,lang,page});
+        let items = [];
+        try {
+          items = await fetchPage(url);
+        } catch (e) {
+          if (++loops <= 2) { await sleep(1500); continue; }
+          throw e;
+        }
+        if (!items.length) break;
+
+        for (const it of items) {
+          const ext = String(it.contentid || `${it.title}|${it.addr1||''}`);
+          out.push({
+            source: 'tourapi',
+            dataset: 'attraction',
+            external_id: ext,
+            lang,
+            payload: it,
+            city: it.areacode ? String(it.areacode) : null
+          });
+        }
+        if (items.length < 100) break;
+        page++;
+        await sleep(300);
+      }
+      await sleep(300);
     }
   }
-  console.log('attractions saved:', total);
+  if (out.length) {
+    const res = await upsert('raw_sources', out);
+    console.log('saved attractions:', res.count);
+  } else {
+    console.log('no attractions rows');
+  }
 }
-run().catch(e=>{ console.error(e?.meta||e); process.exit(1); });
+
+run().catch(e => { console.error(e); process.exit(1); });
