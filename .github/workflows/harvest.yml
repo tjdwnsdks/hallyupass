@@ -1,56 +1,56 @@
-name: harvest
-on:
-  workflow_dispatch:
-  push:
-    paths:
-      - ".github/workflows/harvest.yml"
-      - "scripts/**"
+# name: harvest
+# on:
+#   workflow_dispatch:
+#   push:
+#     paths:
+#       - ".github/workflows/harvest.yml"
+#       - "scripts/**"
 
-jobs:
-  run:
-    runs-on: ubuntu-latest
-    env:
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
-      DATA_GO_KR_TOURAPI: ${{ secrets.DATA_GO_KR_TOURAPI }}
-      DATA_GO_KR_KCISA:  ${{ secrets.DATA_GO_KR_KCISA }}
-      TOUR_LANGS: ko,en,ja,chs,cht
-      DAYS_AHEAD: 60
-      AREACODES: 1,2,3,4,5,6,7,8,31,32,33,34,35,36,37,38,39
+# jobs:
+#   run:
+#     runs-on: ubuntu-latest
+#     env:
+#       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+#       SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
+#       DATA_GO_KR_TOURAPI: ${{ secrets.DATA_GO_KR_TOURAPI }}
+#       DATA_GO_KR_KCISA:  ${{ secrets.DATA_GO_KR_KCISA }}
+#       TOUR_LANGS: ko,en,ja,chs,cht
+#       DAYS_AHEAD: 60
+#       AREACODES: 1,2,3,4,5,6,7,8,31,32,33,34,35,36,37,38,39
 
-    steps:
-      - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+#     steps:
+#       - uses: actions/checkout@v4
+#         with: { fetch-depth: 0 }
 
-      - uses: actions/setup-node@v4
-        with: { node-version: 20 }
+#       - uses: actions/setup-node@v4
+#         with: { node-version: 20 }
 
-      # kcisa 스크립트 실제 내용 출력(검증)
-      - name: Show kcisa script
-        run: |
-          echo "BRANCH=$(git rev-parse --abbrev-ref HEAD)"
-          echo "COMMIT=$(git rev-parse HEAD)"
-          echo "--- scripts/debug-kcisa.mjs ---"
-          sed -n '1,200p' scripts/debug-kcisa.mjs
+#       # kcisa 스크립트 실제 내용 출력(검증)
+#       - name: Show kcisa script
+#         run: |
+#           echo "BRANCH=$(git rev-parse --abbrev-ref HEAD)"
+#           echo "COMMIT=$(git rev-parse HEAD)"
+#           echo "--- scripts/debug-kcisa.mjs ---"
+#           sed -n '1,200p' scripts/debug-kcisa.mjs
 
-      # 금지 토큰 존재 시 즉시 실패(옛 코드 차단)
-      - name: Assert no legacy params
-        run: |
-          bad=$(git grep -n -E "_type=|cPage=|rows=" -- scripts/debug-kcisa.mjs || true)
-          if [ -n "$bad" ]; then
-            echo "::error::Found legacy params in debug-kcisa.mjs:"
-            echo "$bad"
-            exit 1
-          fi
+#       # 금지 토큰 존재 시 즉시 실패(옛 코드 차단)
+#       - name: Assert no legacy params
+#         run: |
+#           bad=$(git grep -n -E "_type=|cPage=|rows=" -- scripts/debug-kcisa.mjs || true)
+#           if [ -n "$bad" ]; then
+#             echo "::error::Found legacy params in debug-kcisa.mjs:"
+#             echo "$bad"
+#             exit 1
+#           fi
 
-      - name: Debug TourAPI
-        run: node scripts/debug-tourapi.mjs
+#       - name: Debug TourAPI
+#         run: node scripts/debug-tourapi.mjs
 
-      - name: Debug KCISA (cultureInfo)
-        if: ${{ env.DATA_GO_KR_KCISA != '' }}
-        env:
-          DATA_GO_KR_KCISA: ${{ secrets.DATA_GO_KR_KCISA }}
-        run: node scripts/debug-kcisa.mjs
+#       - name: Debug KCISA (cultureInfo)
+#         if: ${{ env.DATA_GO_KR_KCISA != '' }}
+#         env:
+#           DATA_GO_KR_KCISA: ${{ secrets.DATA_GO_KR_KCISA }}
+#         run: node scripts/debug-kcisa.mjs
 
-      - name: Harvest festivals
-        run: node scripts/harvest-tourapi-festivals.mjs
+#       - name: Harvest festivals
+#         run: node scripts/harvest-tourapi-festivals.mjs
